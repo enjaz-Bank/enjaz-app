@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>منصة إنجاز الأكاديمية</title>
+
+<meta http-equiv="Content-Security-Policy" content="default-src * 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https:; frame-src * 'self' https: data: blob:; img-src * 'self' data: blob: https:; media-src * 'self' data: blob: https:">
+
+<script src="https://cdn.tailwindcss.com"></script>
+<script> tailwind.config = { darkMode: 'class' } </script>
+
+<script>
+  window.MathJax = {
+    tex: { inlineMath: [['$', '$'], ['\\(', '\\)']], displayMath: [['$$', '$$'], ['\\[', '\\]']], processEscapes: true, processEnvironments: true, packages: { '[+]': ['ams', 'boldsymbol', 'color', 'textmacros', 'noerrors', 'noundefined'] } },
+    options: { skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'], ignoreHtmlClass: 'tex2jax_ignore', processHtmlClass: 'tex2jax_process' },
+    svg: { fontCache: 'local', scale: 0.92 },
+    startup: { typeset: false }
+  };
+</script>
+<script async id="MathJax-script" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
+  import { getFirestore, collection, onSnapshot, doc, getDoc, query, where, setDoc } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
+  import { getAuth, RecaptchaVerifier, signInWithPhoneNumber, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyAex1r9HHheqUgmjz6tbyLuob3yA4JXGfk",
+    authDomain: "enjaz-academy-6c4ee.firebaseapp.com",
+    projectId: "enjaz-academy-6c4ee",
+    storageBucket: "enjaz-academy-6c4ee.firebasestorage.app",
+    messagingSenderId: "856108513861",
+    appId: "1:856108513861:web:e69831467ff78318a1812c",
+    measurementId: "G-62MCQFTRQJ"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+  const auth = getAuth(app);
+
+  let currentUser = null;
+  let currentUserData = null;
+  let lessonsData = [];
+  let currentView = "grid";
+  let bookmarks = JSON.parse(localStorage.getItem('enjaz_bookmarks')) || [];
+  let currentLessonFiles = [];
+  let currentViewingFile = null;
+  let activeListeners = { lessons: null, files: null, ads: null, exams: null, slider: null };
+  let sliderImages = [];
+  let sliderIndex = 0;
+  let sliderInterval = null;
+  let confirmationResult = null; // لحفظ نتيجة إرسال الكود
+
+  const CACHE_KEY_LESSONS = 'enjaz_lessons_cache_v6';
+  const CACHE_KEY_SETTINGS = 'enjaz_settings_cache_v6';
+
+  const fixedSubjects = [
+    { name: "رياضيات", color: "from-purple-500 to-purple-700", icon: "fa-square-root-variable" },
+    { name: "الفيزياء", color: "from-blue-500 to-blue-700", icon: "fa-atom" },
+    { name: "الكيمياء", color: "from-cyan-500 to-cyan-700", icon: "fa-flask" },
+    { name: "العلوم", color: "from-green-500 to-green-700", icon: "fa-dna" },
+    { name: "اللغة العربية", color: "from-red-500 to-red-700", icon: "fa-book-open" },
+    { name: "اللغة الانكليزية", color: "from-amber-500 to-amber-700", icon: "fa-language" },
+    { name: "اللغةالفرنسية", color: "from-pink-500 to-pink-700", icon: "fa-comments" },
+    { name: "التربية الاسلامية", color: "from-emerald-600 to-emerald-800", icon: "fa-mosque" }
+  ];
+
+  let navLevel = 0;
+  const appStack = [];
+
+  function pushScreen(name, data) { navLevel++; appStack.push({ name, data: data || null }); try { history.pushState({ level: navLevel }, ''); } catch (e) {} }
+  function requestBack() { if (navLevel > 0) { try { history.back(); } catch (e) {} } }
+
+  function applyCloseForState(state) {
+    if (!state) return;
+    switch (state.name) {
+      case 'viewer':
+        document.getElementById('viewerScreen').style.display = 'none';
+        document.getElementById('lessonFilesScreen').style.display = 'flex';
+        document.getElementById('viewerFrame').srcdoc = '';
+        document.getElementById('viewerFrame').src = 'about:blank';
+        break;
+      case 'lessonFiles':
+        document.getElementById('lessonFilesScreen').style.display = 'none';
+        document.getElementById('appFrame').style.display = 'block';
+        if (activeListeners.files) { activeListeners.files(); activeListeners.files = null; }
+        break;
+      case 'subjectList':
+        document.getElementById('listView').style.display = 'none';
+        document.getElementById('gridView').style.display = 'block';
+        currentView = 'grid';
+        break;
+      case 'premiumModal':
+        document.getElementById('premiumModal').classList.add('hidden');
+        document.getElementById('premiumModal').classList.remove('flex');
+        break;
+      case 'socialMenu':
+        document.getElementById('socialMenu').classList.add('hidden');
+        break;
+      case 'authScreen':
+        document.getElementById('authScreen').classList.add('hidden');
+        document.getElementById('authScreen').classList.remove('flex');
+        break;
+    }
+  }
+
+  window.addEventListener('popstate', function (e) {
+    const target = (e.state && typeof e.state.level === 'number') ? e.state.level : 0;
+    while (navLevel > target) { const st = appStack.pop(); navLevel--; applyCloseForState(st); }
+  });
+
+  window.showAppTab = function(tabName) {
+    document.querySelectorAll('.app-tab').forEach(t => t.classList.add('hidden'));
+    document.getElementById(tabName).classList.remove('hidden');
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('nav-active'));
+    document.getElementById('nav-'+tabName).classList.add('nav-active');
+    document.getElementById('lessonFilesScreen').style.display = 'none';
+    document.getElementById('viewerScreen').style.display = 'none';
+    document.getElementById('appFrame').style.display = 'block';
+    if (tabName === 'lessonsContainer') { document.getElementById('listView').style.display = 'none'; document.getElementById('gridView').style.display = 'block'; currentView = 'grid'; }
+    if (tabName === 'savedContainer') renderBookmarks();
+  };
+
+  window.toggleTheme = function() {
+    const html = document.documentElement; const icon = document.getElementById('themeIcon');
+    if (html.classList.contains('dark')) { html.classList.remove('dark'); localStorage.setItem('enjaz_theme', 'light'); icon.className = 'fas fa-moon text-lg'; }
+    else { html.classList.add('dark'); localStorage.setItem('enjaz_theme', 'dark'); icon.className = 'fas fa-sun text-lg'; }
+  };
+
+  window.toggleMenu = function() { const menu = document.getElementById('socialMenu'); if (menu.classList.contains('hidden')) { menu.classList.remove('hidden'); pushScreen('socialMenu'); } else { requestBack(); } };
+  window.showPremiumModal = function() { document.getElementById('premiumModal').classList.remove('hidden'); document.getElementById('premiumModal').classList.add('flex'); pushScreen('premiumModal'); };
+  window.closePremiumModal = function() { requestBack(); };
+
+  // =========== نظام المصادقة برقم الهاتف (Phone OTP) ===========
+  window.openAuthScreen = function() {
+    document.getElementById('authScreen').classList.remove('hidden');
+    document.getElementById('authScreen').classList.add('flex');
+    document.getElementById('phoneStep').classList.remove('hidden');
+    document.getElementById('otpStep').classList.add('hidden');
+    document.getElementById('authError').classList.add('hidden');
+    pushScreen('authScreen');
+  }
+  window.closeAuthScreen = function() { requestBack(); }
+
+  // تهيئة reCAPTCHA (لمنع الإساءة)
+  window.setupRecaptcha = function() {
+    if (!window.recaptchaVerifier) {
+      window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
+        'size': 'invisible',
+        'callback': (response) => { console.log("reCAPTCHA verified"); }
+      }, auth);
+      window.recaptchaVerifier.render();
+    }
+  }
+
+  // إرسال الكود
+  window.sendOtp = async function() {
+    const phone = document.getElementById('authPhone').value;
+    const errBox = document.getElementById('authError');
+    if(!phone || phone.length < 10) { errBox.innerText = "الرجاء إدخال رقم هاتف صحيح مع رمز الدولة"; errBox.classList.remove('hidden'); return; }
+
+    setupRecaptcha();
+    const btn = document.getElementById('sendOtpBtn');
+    btn.disabled = true; btn.innerText = "جاري الإرسال...";
+
+    try {
+      confirmationResult = await signInWithPhoneNumber(auth, phone, window.recaptchaVerifier);
+      document.getElementById('phoneStep').classList.add('hidden');
+      document.getElementById('otpStep').classList.remove('hidden');
+    } catch(e) {
+      errBox.innerText = e.message.replace('Firebase:', '').trim();
+      errBox.classList.remove('hidden');
+      btn.disabled = false; btn.innerText = "إرسال الكود";
+      // إعادة تعيين reCAPTCHA عند الفشل
+      if (window.recaptchaVerifier) { window.recaptchaVerifier.clear(); window.recaptchaVerifier = null; }
+    }
+  }
+
+  // التحقق من الكود
+  window.verifyOtp = async function() {
+    const code = document.getElementById('authCode').value;
+    const errBox = document.getElementById('authError');
+    if(!code || code.length < 6) { errBox.innerText = "الرجاء إدخال الكود المكون من 6 أرقام"; errBox.classList.remove('hidden'); return; }
+
+    const btn = document.getElementById('verifyOtpBtn');
+    btn.disabled = true; btn.innerText = "جاري التحقق...";
+
+    try {
+      const cred = await confirmationResult.confirm(code);
+      const phone = document.getElementById('authPhone').value;
+      // إنشاء/تحديث وثيقة الطالب في قاعدة البيانات (merge: true حتى لا نحذف اشتراكاته إذا سجل دخوله مجدداً)
+      await setDoc(doc(db, "users", cred.user.uid), { phone: phone }, { merge: true });
+      closeAuthScreen();
+    } catch(e) {
+      errBox.innerText = "الكود غير صحيح، حاول مرة أخرى";
+      errBox.classList.remove('hidden');
+      btn.disabled = false; btn.innerText = "تأكيد الكود";
+    }
+  }
+
+  window.handleLogout = function() {
+    signOut(auth).then(() => { requestBack(); });
+  }
+  // ========================================================
+
+  function saveLessonsCache() { try { localStorage.setItem(CACHE_KEY_LESSONS, JSON.stringify(lessonsData)); } catch (e) {} }
+  function loadLessonsCache() { try { const raw = localStorage.getItem(CACHE_KEY_LESSONS); if (!raw) return false; const arr = JSON.parse(raw); if (!Array.isArray(arr)) return false; lessonsData = arr; updateStats(); renderGrid(); return true; } catch (e) { return false; } }
+
+  function applyHeaderBg(bgUrl) { const layer = document.getElementById('headerBgLayer'); if (layer) layer.style.backgroundImage = `url(${bgUrl})`; const filesHeader = document.getElementById('headerBgLayerFiles'); if (filesHeader) filesHeader.style.backgroundImage = `url(${bgUrl})`; }
+
+  window.loadAppSettings = async function() {
+    try { const cached = localStorage.getItem(CACHE_KEY_SETTINGS); if (cached) { const bg = JSON.parse(cached); if (bg.headerBg) applyHeaderBg(bg.headerBg); applyMarquee(bg.marqueeText, bg.marqueeSpeed, bg.marqueeColor); } } catch (e) {}
+    try {
+      const docSnap = await getDoc(doc(db, "settings", "appConfig"));
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        if (data.headerBg) applyHeaderBg(data.headerBg);
+        applyMarquee(data.marqueeText, data.marqueeSpeed, data.marqueeColor);
+        try { localStorage.setItem(CACHE_KEY_SETTINGS, JSON.stringify({ headerBg: data.headerBg, marqueeText: data.marqueeText, marqueeSpeed: data.marqueeSpeed, marqueeColor: data.marqueeColor })); } catch (e) {}
+      }
+    } catch (e) {}
+  };
+
+  function applyMarquee(text, speed, color) {
+    const bar = document.getElementById('marqueeBar');
+    const txtEl = document.getElementById('marqueeText');
+    if(text && text.trim() !== "") {
+      txtEl.innerText = text;
+      bar.classList.remove('hidden');
+      if(speed) txtEl.style.animationDuration = speed + 's';
+      if(color) txtEl.style.color = color;
+    } else {
+      bar.classList.add('hidden');
+    }
+  }
+
+  window.loadSlider = function() {
+    if (activeListeners.slider) activeListeners.slider();
+    activeListeners.slider = onSnapshot(collection(db, "slider"), (snap) => {
+      sliderImages = [];
+      snap.forEach(d => sliderImages.push(d.data().image));
+      const container = document.getElementById('sliderContainer');
+      if(sliderImages.length > 0) {
+        container.classList.remove('hidden');
+        document.getElementById('sliderImg').src = sliderImages[0];
+        if(sliderInterval) clearInterval(sliderInterval);
+        if(sliderImages.length > 1) {
+          sliderInterval = setInterval(() => {
+            sliderIndex = (sliderIndex + 1) % sliderImages.length;
+            document.getElementById('sliderImg').src = sliderImages[sliderIndex];
+          }, 4000);
+        }
+      } else {
+        container.classList.add('hidden');
+      }
+    });
+  };
+
+  window.loadAppLessons = function() {
+    const hasCache = loadLessonsCache();
+    if (!hasCache) renderSkeletons();
+    if (activeListeners.lessons) activeListeners.lessons();
+    activeListeners.lessons = onSnapshot(collection(db, "lessons"), (snapshot) => {
+        lessonsData = [];
+        snapshot.forEach((docSnap) => lessonsData.push({ id: docSnap.id, ...docSnap.data() }));
+        lessonsData.sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
+        saveLessonsCache(); updateStats(); renderGrid();
+      }, (err) => { console.warn('Error:', err); if (!hasCache) renderSkeletons(); }
+    );
+  };
+
+  window.updateStats = function() {
+    document.getElementById('statLessons').innerText = lessonsData.length;
+    document.getElementById('statSubjects').innerText = fixedSubjects.length;
+    document.getElementById('progressBar').style.width = "75%";
+  };
+
+  window.renderSkeletons = function() {
+    let html = "";
+    for (let i = 0; i < 8; i++) html += `<div class="bg-gray-200 dark:bg-gray-700 rounded-3xl h-40 animate-pulse"></div>`;
+    document.getElementById('lessonsGrid').innerHTML = html;
+  };
+
+  window.renderGrid = function() {
+    let finalHTML = "";
+    fixedSubjects.forEach(sub => {
+      const count = lessonsData.filter(l => l.subject === sub.name).length;
+      finalHTML += `<div onclick="openSubject('${sub.name}')" class="bg-gradient-to-br ${sub.color} p-4 rounded-3xl shadow-lg cursor-pointer active:scale-95 transition-transform duration-150 h-40 flex flex-col justify-between text-white relative overflow-hidden"><div class="absolute top-0 left-0 w-24 h-24 bg-white/10 rounded-full -mt-10 -ml-10"></div><div class="flex justify-between items-start relative z-10"><i class="fas ${sub.icon} text-3xl opacity-90"></i><span class="bg-white/25 backdrop-blur-sm px-2 py-1 rounded-full text-xs font-bold">${count} درس</span></div><h3 class="text-lg font-extrabold leading-tight relative z-10">${sub.name}</h3></div>`;
+    });
+    document.getElementById('lessonsGrid').innerHTML = finalHTML;
+  };
+
+  window.toggleBookmark = function(id, event) {
+    event.stopPropagation();
+    if (bookmarks.includes(id)) bookmarks = bookmarks.filter(b => b !== id); else bookmarks.push(id);
+    localStorage.setItem('enjaz_bookmarks', JSON.stringify(bookmarks));
+    if (!document.getElementById('savedContainer').classList.contains('hidden')) renderBookmarks();
+  };
+
+  function renderLessonCard(lesson) {
+    let isBookmarked = bookmarks.includes(lesson.id);
+    let starClass = isBookmarked ? 'fa-solid text-amber-400' : 'fa-regular text-gray-300 dark:text-gray-600';
+    return `<div class="bg-white dark:bg-slate-800 p-4 rounded-2xl shadow-sm border border-gray-100 dark:border-slate-700 flex justify-between items-center cursor-pointer mb-3" onclick="openLesson('${lesson.id}')"><div class="flex items-center gap-4"><div class="w-12 h-12 rounded-xl bg-indigo-50 dark:bg-indigo-900/30 text-indigo-500 flex items-center justify-center text-xl"><i class="fas fa-book"></i></div><h4 class="font-bold text-md text-gray-800 dark:text-gray-200">${lesson.title}</h4></div><div class="flex items-center gap-2"><button onclick="toggleBookmark('${lesson.id}', event)" class="text-2xl w-8 h-8 flex items-center justify-center"><i class="fa-star ${starClass}"></i></button><span class="text-indigo-600 dark:text-indigo-400 text-xl bg-indigo-50 dark:bg-indigo-900/30 w-10 h-10 rounded-full flex items-center justify-center"><i class="fas fa-chevron-left text-sm"></i></span></div></div>`;
+  }
+
+  window.openSubject = function(subjectName) {
+    document.getElementById('listTitle').innerText = subjectName;
+    const container = document.getElementById('lessonsList');
+    const filteredLessons = lessonsData.filter(l => l.subject === subjectName);
+    if (filteredLessons.length === 0) { container.innerHTML = `<div class="text-center mt-20 text-gray-400"><i class="far fa-folder-open text-5xl mb-4 block"></i><p>لا توجد دروس في هذه المادة.</p></div>`; }
+    else { let listHTML = ""; filteredLessons.forEach(lesson => listHTML += renderLessonCard(lesson)); container.innerHTML = listHTML; }
+    document.getElementById('gridView').style.display = 'none';
+    document.getElementById('listView').style.display = 'block';
+    currentView = "list";
+    pushScreen('subjectList', { subject: subjectName });
+  };
+
+  window.renderBookmarks = function() {
+    const container = document.getElementById('savedList');
+    const savedLessons = lessonsData.filter(l => bookmarks.includes(l.id));
+    if (savedLessons.length === 0) { container.innerHTML = `<div class="text-center mt-20 text-gray-400"><i class="far fa-star text-5xl mb-4 block"></i><p>لا توجد دروس محفوظة.</p></div>`; return; }
+    let listHTML = ""; savedLessons.forEach(lesson => listHTML += renderLessonCard(lesson));
+    container.innerHTML = listHTML;
+  };
+
+  window.showGridView = function() {
+    document.getElementById('listView').style.display = 'none';
+    document.getElementById('gridView').style.display = 'block';
+    currentView = 'grid';
+    document.getElementById('searchInput').value = '';
+    document.getElementById('searchClearBtn').classList.add('hidden');
+  };
+
+  window.clearSearch = function() {
+    document.getElementById('searchInput').value = '';
+    showGridView();
+  };
+
+  window.searchLessons = function() {
+    const input = document.getElementById('searchInput');
+    const clearBtn = document.getElementById('searchClearBtn');
+    const query = input.value.toLowerCase();
+    
+    if(query.length > 0) clearBtn.classList.remove('hidden');
+    else clearBtn.classList.add('hidden');
+
+    if (query.trim() === "") { showGridView(); return; }
+    
+    document.getElementById('listTitle').innerText = "نتائج البحث";
+    const container = document.getElementById('lessonsList');
+    const filteredLessons = lessonsData.filter(l => l.title.toLowerCase().includes(query));
+    if (filteredLessons.length === 0) container.innerHTML = "<p class='text-gray-400 text-center mt-10'>لا توجد نتائج.</p>";
+    else { let listHTML = ""; filteredLessons.forEach(lesson => listHTML += renderLessonCard(lesson)); container.innerHTML = listHTML; }
+    document.getElementById('gridView').style.display = 'none';
+    document.getElementById('listView').style.display = 'block';
+    currentView = "search";
+  };
+
+  window.openLesson = function(id) {
+    const lesson = lessonsData.find(l => l.id === id);
+    if (!lesson) return;
+    document.getElementById('filesLessonTitle').innerText = lesson.title;
+    document.getElementById('filesContainer').innerHTML = `<div class="text-center mt-10"><div class="w-8 h-8 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin mx-auto"></div></div>`;
+    document.getElementById('lessonFilesScreen').style.display = 'flex';
+    document.getElementById('appFrame').style.display = 'none';
+    pushScreen('lessonFiles', { lessonId: id });
+    if (activeListeners.files) activeListeners.files();
+    const q = query(collection(db, "files"), where("lessonId", "==", id));
+    
+    activeListeners.files = onSnapshot(q, (snap) => {
+      currentLessonFiles = [];
+      snap.forEach(d => currentLessonFiles.push({ id: d.id, ...d.data() }));
+      
+      const order = ["الدروس الشاملة", "الدرس الشامل", "بطاقات المراجعة", "ملحق التمارين", "الادوات المساعدة", "الأدوات المساعدة"];
+      currentLessonFiles.sort((a, b) => {
+        let aIndex = order.findIndex(o => a.fileName.includes(o));
+        let bIndex = order.findIndex(o => b.fileName.includes(o));
+        if (aIndex === -1) aIndex = 99;
+        if (bIndex === -1) bIndex = 99;
+        return aIndex - bIndex;
+      });
+
+      if (currentLessonFiles.length === 0) { document.getElementById('filesContainer').innerHTML = "<p class='text-gray-400 text-center mt-10'>لا توجد ملفات.</p>"; return; }
+      let html = `<div class="space-y-4 mt-2">`;
+      currentLessonFiles.forEach((f, index) => {
+        let lockBadge = f.isPremium ? '<span class="text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded font-bold">مدفوع</span>' : '<span class="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded font-bold">مجاني</span>';
+        html += `<div class="bg-gradient-to-l from-blue-50 to-amber-50 dark:from-slate-800 dark:to-slate-700 p-4 rounded-2xl shadow-md border border-white dark:border-slate-600 flex items-center justify-between"><div class="flex items-center gap-3 flex-1"><span class="w-8 h-8 bg-indigo-100 dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 rounded-full flex items-center justify-center font-bold text-sm">${index+1}</span><div class="flex flex-col"><h4 class="font-bold text-sm text-gray-800 dark:text-gray-200">${f.fileName}</h4><div class="flex gap-1 mt-1 items-center">${lockBadge}</div></div></div><div class="flex gap-2 items-center"><button onclick="viewFileByIndex(${index})" class="bg-blue-500 text-white text-xs px-6 py-2 rounded-lg font-bold flex items-center gap-1 hover:bg-blue-600"><i class="fas fa-eye"></i> عرض</button></div></div>`;
+      });
+      html += `</div>`;
+      document.getElementById('filesContainer').innerHTML = html;
+    });
+  };
+
+  window.closeLessonFiles = function() { requestBack(); };
+
+  async function prepareFrameContent(fileUrl, isExternal, isPdf, fileTitle) {
+    let htmlText = "";
+    if (isExternal) {
+      const driveMatch = fileUrl.match(/https:\/\/drive\.google\.com\/file\/d\/(.*?)(\/|\?|$)/);
+      if (driveMatch && driveMatch[1]) fileUrl = `https://drive.google.com/file/d/${driveMatch[1]}/preview`;
+      return { type: 'url', content: fileUrl };
+    } else if (isPdf || fileUrl.includes('.pdf') || fileUrl.startsWith('data:application/pdf')) {
+      return { type: 'url', content: fileUrl };
+    } else {
+      if (fileUrl.startsWith('data:text/html;base64,')) {
+        const base64String = fileUrl.split(',')[1];
+        const binaryString = atob(base64String);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
+        htmlText = new TextDecoder('utf-8').decode(bytes);
+      } else if (fileUrl.startsWith('http')) {
+        const response = await fetch(fileUrl); htmlText = await response.text();
+      } else { htmlText = fileUrl; }
+
+      htmlText = htmlText.replace(/<title>.*?<\/title>/gi, '');
+      const titleTag = `<title>${fileTitle || 'درس'}</title>`;
+      const mathJaxConfig = `<script>window.MathJax = { tex: { inlineMath: [['$', '$'], ['\\\\(', '\\\\)']], displayMath: [['$$', '$$'], ['\\\\[', '\\\\]']] }, svg: { scale: 0.9 } };<\/script>`;
+      const mathJaxScript = '<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"><\/script>';
+      const sizeCss = `<style>mjx-container { font-size: 1.05em !important; scale: 1 !important; display: inline-block !important; vertical-align: middle !important; margin: 0 !important; padding: 0 !important; line-height: 1.2 !important; } mjx-container[display="true"] { display: block !important; margin: 2mm 0 !important; } mjx-container svg { max-width: 100% !important; height: auto !important; } @media print { @page { size: A4 portrait; margin: 10mm; } html, body { font-size: 10pt !important; line-height: 1.5 !important; margin: 0 !important; padding: 0 !important; background: #fff !important; color: #000 !important; } .container { max-width: 100% !important; border-radius: 0 !important; box-shadow: none !important; } .sticky-nav, .no-print { display: none !important; } .header, .footer { padding: 3mm 6mm !important; break-inside: avoid !important; } .section { margin: 0 0 3mm 0 !important; border: 1px solid #999 !important; box-shadow: none !important; break-inside: auto !important; } .section-header { padding: 1.5mm 2.5mm !important; } .content-box { padding: 2mm 3mm !important; } .box { padding: 1.5mm 2.5mm !important; margin: 1.5mm 0 !important; font-size: 9.5pt !important; break-inside: avoid !important; } .law-box { font-size: 10pt !important; padding: 2mm 3mm !important; break-inside: avoid !important; } .law-box .law-title { font-size: 9pt !important; } .flex-row { display: flex !important; flex-direction: row !important; flex-wrap: nowrap !important; gap: 3mm !important; } table, tr, thead, tbody { break-inside: avoid !important; } h1, h2, h3 { break-after: avoid; } p, li { orphans: 3; widows: 3; } mjx-container { font-size: 8.5pt !important; line-height: 1.2 !important; vertical-align: middle !important; margin: 0 !important; padding: 0 !important; } mjx-container[display="true"] { margin: 1.5mm 0 !important; } .law-box mjx-container { font-size: 9pt !important; } }</style>`;
+
+      if (htmlText.includes('</head>')) {
+        htmlText = htmlText.replace('</head>', titleTag + mathJaxConfig + mathJaxScript + sizeCss + '</head>');
+      } else if (htmlText.includes('<head>')) {
+        htmlText = htmlText.replace('<head>', `<head>${titleTag}${mathJaxConfig}${mathJaxScript}${sizeCss}`);
+      } else {
+        htmlText = `<head>${titleTag}${mathJaxConfig}${mathJaxScript}${sizeCss}</head><body>${htmlText}</body>`;
+      }
+      return { type: 'srcdoc', content: htmlText };
+    }
+  }
+
+  window.viewFileByIndex = async function(index) {
+    const f = currentLessonFiles[index];
+    if (!f) return;
+    
+    if (f.isPremium) {
+      if (!currentUser) {
+        openAuthScreen();
+        return;
+      } else if (!currentUserData || !currentUserData.isPremium) {
+        showPremiumModal();
+        return;
+      }
+    }
+
+    currentViewingFile = f;
+    document.getElementById('lessonTitle').innerText = f.fileName;
+    const frame = document.getElementById('viewerFrame');
+    frame.onload = null; 
+    document.getElementById('viewerScreen').style.display = 'flex';
+    document.getElementById('lessonFilesScreen').style.display = 'none';
+    pushScreen('viewer');
+    frame.src = "about:blank";
+    frame.srcdoc = `<div style="display:flex;justify-content:center;align-items:center;height:90vh;font-family:sans-serif;color:#666;"><div style="text-align:center;"><div style="border:4px solid #f3f3f3;border-top:4px solid #4f46e5;border-radius:50%;width:40px;height:40px;animation:spin 1s linear infinite;margin:0 auto;"></div><p style="margin-top:10px;">جاري التحميل...</p></div><style>@keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}</style></div>`;
+
+    try {
+      const result = await prepareFrameContent(f.fileData, f.isExternal, f.isPdf, f.fileName);
+      if (result.type === 'url') frame.src = result.content;
+      else frame.srcdoc = result.content;
+    } catch (e) { frame.srcdoc = `<div style="text-align:center;padding:20px;color:red;">خطأ في تحميل المحتوى.</div>`; }
+  };
+
+  window.closeLesson = function() { requestBack(); };
+
+  window.printCurrentView = function() {
+    if (!currentViewingFile) return;
+    if (currentViewingFile.isExternal || currentViewingFile.isPdf) {
+      window.open(currentViewingFile.fileData, '_blank');
+      return;
+    }
+    const frame = document.getElementById('viewerFrame');
+    if (!frame || !frame.contentWindow) { alert("لا يمكن الطباعة."); return; }
+    const overlay = document.getElementById('pdfLoadingOverlay');
+    overlay.classList.remove('hidden'); overlay.classList.add('flex');
+    
+    try {
+      const fileTitle = currentViewingFile.fileName || 'درس';
+      const originalTitle = document.title;
+      document.title = fileTitle;
+      try { frame.contentDocument.title = fileTitle; } catch(e){}
+
+      setTimeout(() => {
+        frame.contentWindow.focus();
+        frame.contentWindow.print();
+        setTimeout(() => { document.title = originalTitle; }, 500);
+        overlay.classList.add('hidden'); overlay.classList.remove('flex');
+      }, 300);
+    } catch(e) { 
+      alert("تعذر فتح نافذة الطباعة."); 
+      overlay.classList.add('hidden'); overlay.classList.remove('flex'); 
+    }
+  };
+
+  window.loadAppAds = function() {
+    if (activeListeners.ads) activeListeners.ads();
+    activeListeners.ads = onSnapshot(collection(db, "ads"), (snap) => {
+      const c = document.getElementById('adsList'); c.innerHTML = "";
+      if (snap.empty) c.innerHTML = `<div class="text-center mt-20 text-gray-400"><i class="far fa-bell text-5xl mb-4 block"></i><p>لا توجد إعلانات.</p></div>`;
+      snap.forEach(d => {
+        const ad = d.data();
+        let mediaHTML = ad.imageUrl ? `<img src="${ad.imageUrl}" class="w-full rounded-xl mb-3" style="max-height: 300px; object-fit: cover;">` : (ad.videoUrl ? `<video src="${ad.videoUrl}" controls class="w-full rounded-xl mb-3"></video>` : "");
+        c.innerHTML += `<div class="bg-white dark:bg-slate-800 p-4 rounded-2xl shadow-sm mb-4 border"><h3 class="font-bold text-lg mb-3 text-gray-800 dark:text-gray-200">${ad.title}</h3>${mediaHTML}</div>`;
+      });
+    });
+  };
+
+  window.loadAppExams = function() {
+    if (activeListeners.exams) activeListeners.exams();
+    activeListeners.exams = onSnapshot(collection(db, "exams"), (snap) => {
+      const c = document.getElementById('examsList'); c.innerHTML = "";
+      if (snap.empty) c.innerHTML = `<div class="text-center mt-20 text-gray-400"><i class="far fa-folder text-5xl mb-4 block"></i><p>لا توجد ملفات.</p></div>`;
+      snap.forEach(d => {
+        const ex = d.data();
+        const lockBadge = ex.isPremium ? '<span class="text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded font-bold">مدفوع</span>' : '<span class="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded font-bold">مجاني</span>';
+        c.innerHTML += `<div class="bg-white dark:bg-slate-800 p-4 rounded-2xl shadow-sm mb-3 flex justify-between items-center border"><div class="flex items-center gap-3"><div class="w-12 h-12 rounded-xl bg-indigo-50 flex items-center justify-center text-xl text-indigo-600"><i class="fas fa-folder-open"></i></div><div><h3 class="font-bold text-md text-gray-800 dark:text-gray-200">${ex.title}</h3><div class="mt-1">${lockBadge}</div></div></div><div class="flex gap-2"><button onclick="${ex.isPremium ? 'showPremiumModal()' : `openExamFile('${ex.fileUrl}')`}" class="bg-indigo-50 text-indigo-600 p-3 rounded-xl"><i class="fas fa-eye"></i></button><a href="${ex.fileUrl}" target="_blank" download="${ex.title}" onclick="${ex.isPremium ? 'event.preventDefault(); showPremiumModal();' : ''}" class="bg-emerald-50 text-emerald-600 p-3 rounded-xl"><i class="fas fa-download"></i></a></div></div>`;
+      });
+    });
+  };
+
+  // مراقب حالة تسجيل الدخول
+  onAuthStateChanged(auth, async (user) => {
+    const authBtn = document.getElementById('authBtnNav');
+    
+    if (user) {
+      currentUser = user;
+      authBtn.classList.remove('hidden');
+      authBtn.innerText = "تسجيل الخروج";
+      authBtn.onclick = handleLogout;
+
+      try {
+        const userDoc = await getDoc(doc(db, "users", user.uid));
+        if (userDoc.exists()) {
+          currentUserData = userDoc.data();
+        } else {
+          currentUserData = { isPremium: false };
+        }
+      } catch(e) {
+        currentUserData = { isPremium: false };
+      }
+    } else {
+      currentUser = null;
+      currentUserData = null;
+      authBtn.classList.remove('hidden');
+      authBtn.innerText = "تسجيل الدخول";
+      authBtn.onclick = openAuthScreen;
+    }
+  });
+
+  window.onload = function() {
+    if (localStorage.getItem('enjaz_theme') === 'dark') { document.documentElement.classList.add('dark'); document.getElementById('themeIcon').className = 'fas fa-sun text-lg'; }
+    try { history.replaceState({ level: 0 }, ''); } catch (e) {}
+    
+    window.loadAppLessons(); 
+    window.loadAppAds(); 
+    window.loadAppExams(); 
+    window.loadAppSettings(); 
+    window.loadSlider();
+
+    setTimeout(() => { document.getElementById('splashScreen').classList.add('opacity-0'); setTimeout(() => document.getElementById('splashScreen').style.display = 'none', 500); }, 1200);
+  };
+</script>
+<style>
+  * { -webkit-tap-highlight-color: transparent; }
+  body { font-family: 'Cairo', sans-serif; background-color: #eef2ff; background-image: radial-gradient(at 0% 0%, hsla(253, 100%, 93%, 0.4) 0px, transparent 50%), radial-gradient(at 98% 1%, hsla(215, 100%, 93%, 0.4) 0px, transparent 50%); min-height: 100vh; }
+  .dark body { background-color: #0f172a; }
+  ::-webkit-scrollbar { width: 0px; }
+  .nav-btn, .nav-btn i, .nav-btn span { color: #000000; transition: color .3s ease, transform .3s ease; }
+  .dark .nav-btn, .dark .nav-btn i, .dark .nav-btn span { color: #ffffff; }
+  .nav-btn.nav-active, .nav-btn.nav-active i, .nav-btn.nav-active span { color: #4f46e5; font-weight: bold; }
+  .nav-btn.nav-active i { transform: translateY(-4px); }
+  .dark .nav-btn.nav-active, .dark .nav-btn.nav-active i, .dark .nav-btn.nav-active span { color: #93c5fd; }
+  .watermark { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(-45deg); font-size: 3rem; font-weight: bold; color: rgba(0, 0, 0, 0.1); pointer-events: none; z-index: 10; white-space: nowrap; }
+  .dark .watermark { color: rgba(255, 255, 255, 0.1); }
+  .ctrl-btn { width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border-radius: 12px; }
+  .marquee-container { overflow: hidden; white-space: nowrap; }
+  .marquee-text { display: inline-block; padding-right: 100%; animation: marquee 15s linear infinite; }
+  @keyframes marquee { 0% { transform: translateX(100%); } 100% { transform: translateX(0%); } }
+</style>
+</head>
+<body class="text-gray-800 dark:text-gray-200 flex justify-center">
+
+  <div id="pdfLoadingOverlay" class="fixed inset-0 z-[2147483647] bg-black/70 backdrop-blur-sm hidden justify-center items-center flex-col gap-4">
+    <div class="w-12 h-12 border-4 border-white/30 border-t-white rounded-full animate-spin"></div>
+    <p class="text-white font-bold text-lg">جاري تحضير ملف PDF...</p>
+  </div>
+
+  <div id="premiumModal" class="fixed inset-0 z-[80] bg-black/50 hidden justify-center items-center p-4 backdrop-blur-sm">
+    <div class="bg-white dark:bg-slate-800 rounded-3xl p-6 max-w-xs w-full text-center shadow-2xl">
+      <div class="w-16 h-16 mx-auto bg-amber-100 dark:bg-amber-900/40 rounded-full flex items-center justify-center mb-4"><i class="fas fa-lock text-3xl text-amber-500"></i></div>
+      <h3 class="text-xl font-bold text-gray-800 dark:text-white mb-2">هذا محتوى مدفوع</h3>
+      <p class="text-gray-500 dark:text-gray-400 mb-6 text-sm">يرجى التواصل مع إدارة المنصة لتفعيل الاشتراك.</p>
+      <button onclick="closePremiumModal()" class="w-full bg-indigo-600 text-white p-3 rounded-xl font-bold">حسناً</button>
+    </div>
+  </div>
+
+  <!-- شاشة تسجيل الدخول برقم الهاتف -->
+  <div id="authScreen" class="fixed inset-0 z-[90] bg-gradient-to-br from-indigo-800 via-blue-800 to-blue-900 hidden flex-col justify-center items-center p-6">
+    <div class="bg-white/10 backdrop-blur-xl p-8 rounded-3xl shadow-2xl w-full max-w-sm border border-white/20">
+      <button onclick="closeAuthScreen()" class="text-white mb-4 hover:bg-white/10 p-2 rounded-full"><i class="fas fa-arrow-right text-lg"></i></button>
+      <div class="text-center text-white mb-8">
+        <img src="https://img.icons8.com/3d-fluency/96/graduation-cap.png" class="w-20 h-20 mx-auto mb-3 drop-shadow-lg">
+        <h2 class="text-2xl font-extrabold">تسجيل الدخول</h2>
+        <p class="text-blue-200 text-sm mt-1">للوصول للمحتوى المدفوع، أدخل رقم هاتفك</p>
+      </div>
+      
+      <div id="authError" class="hidden bg-red-500/20 border border-red-400 text-red-200 text-sm p-3 rounded-lg mb-4 text-center"></div>
+
+      <!-- الخطوة 1: إدخال الرقم -->
+      <div id="phoneStep">
+        <input id="authPhone" type="tel" placeholder="+9639xxxxxxxx" class="w-full p-3 mb-4 bg-white/10 text-white placeholder-blue-200 border border-white/20 rounded-xl focus:outline-none focus:border-white">
+        <button id="sendOtpBtn" onclick="sendOtp()" class="w-full bg-white text-indigo-800 p-3 rounded-xl font-bold text-lg hover:bg-blue-100 transition">إرسال الكود</button>
+      </div>
+
+      <!-- الخطوة 2: إدخال الكود -->
+      <div id="otpStep" class="hidden">
+        <input id="authCode" type="text" maxlength="6" placeholder="الكود المكون من 6 أرقام" class="w-full p-3 mb-4 bg-white/10 text-white placeholder-blue-200 border border-white/20 rounded-xl focus:outline-none focus:border-white text-center tracking-[0.5em] text-xl">
+        <button id="verifyOtpBtn" onclick="verifyOtp()" class="w-full bg-white text-indigo-800 p-3 rounded-xl font-bold text-lg hover:bg-blue-100 transition">تأكيد الكود</button>
+      </div>
+      
+      <!-- حاوية reCAPTCHA (مطلوبة من Firebase) -->
+      <div id="recaptcha-container" class="mt-6 flex justify-center"></div>
+    </div>
+  </div>
+
+  <div id="splashScreen" class="fixed inset-0 bg-gradient-to-br from-indigo-900 to-blue-800 flex flex-col justify-center items-center z-[100] transition-opacity duration-500">
+    <div class="animate-pulse text-center"><i class="fas fa-graduation-cap text-6xl text-white mb-4"></i><h1 class="text-3xl font-extrabold text-white px-6">منصة إنجاز الأكاديمية</h1></div>
+    <div class="absolute bottom-20 flex justify-center"><div class="w-10 h-10 border-4 border-indigo-200 border-t-white rounded-full animate-spin"></div></div>
+  </div>
+
+  <div id="appFrame" class="w-full max-w-2xl relative pb-24 min-h-screen overflow-hidden">
+    <div class="absolute top-4 right-4 z-30"><button onclick="toggleMenu()" class="ctrl-btn bg-white/20 backdrop-blur-md text-white"><i class="fas fa-bars text-lg"></i></button></div>
+    <div class="absolute top-4 left-4 z-30"><button onclick="toggleTheme()" class="ctrl-btn bg-white/20 backdrop-blur-md text-white"><i id="themeIcon" class="fas fa-moon text-lg"></i></button></div>
+
+    <div id="socialMenu" class="hidden absolute top-16 right-4 w-56 bg-indigo-900/40 dark:bg-slate-900/60 backdrop-blur-xl rounded-2xl shadow-2xl py-2 z-30 border border-white/20">
+      <a href="https://wa.me/" target="_blank" class="flex items-center gap-3 px-4 py-3 text-white hover:bg-white/10"><i class="fab fa-whatsapp text-green-400 text-xl"></i> واتساب</a>
+      <a href="https://instagram.com/" target="_blank" class="flex items-center gap-3 px-4 py-3 text-white hover:bg-white/10"><i class="fab fa-instagram text-pink-400 text-xl"></i> انستغرام</a>
+      <a href="tel:" class="flex items-center gap-3 px-4 py-3 text-white hover:bg-white/10"><i class="fas fa-phone text-blue-300 text-xl"></i> اتصال</a>
+      <div class="border-t border-white/10 my-1"></div>
+      <a href="#" onclick="event.preventDefault(); requestBack(); setTimeout(()=>{ showPremiumModal(); }, 10);" class="flex items-center gap-3 px-4 py-3 text-white hover:bg-white/10"><i class="fas fa-crown text-amber-400 text-xl"></i> اشتراك</a>
+      <button id="authBtnNav" onclick="openAuthScreen()" class="w-full flex items-center gap-3 px-4 py-3 text-white hover:bg-white/10"><i class="fas fa-right-to-bracket text-blue-300 text-xl"></i> تسجيل الدخول</button>
+    </div>
+
+    <header class="relative bg-gradient-to-br from-indigo-800 via-blue-800 to-blue-900 dark:from-slate-900 dark:to-slate-800 pt-12 pb-16 px-5 rounded-b-[2.5rem] shadow-xl overflow-hidden">
+      <div id="headerBgLayer" class="absolute inset-0 bg-cover bg-center opacity-30 mix-blend-overlay"></div>
+      <div class="relative z-10 flex flex-col items-center text-center text-white pt-8">
+        <img src="https://img.icons8.com/3d-fluency/96/graduation-cap.png" class="w-20 h-20 mb-3 drop-shadow-lg">
+        <h1 class="text-3xl font-extrabold tracking-tight drop-shadow-md">منصة إنجاز الأكاديمية</h1>
+        <p class="text-blue-200 mt-1 font-semibold text-lg">المساعد الأكاديمي التعليمي</p>
+      </div>
+    </header>
+
+    <div class="relative z-20 px-5 -mt-10 mb-4">
+      <div class="bg-white/90 dark:bg-slate-800/90 backdrop-blur-md p-4 rounded-2xl shadow-lg border">
+        <div class="grid grid-cols-3 gap-3 text-center">
+          <div><p class="text-2xl font-extrabold text-indigo-600 dark:text-indigo-400" id="statLessons">0</p><p class="text-xs text-gray-500 dark:text-gray-400 mt-1">الدرس</p></div>
+          <div class="border-r border-l border-gray-200 dark:border-slate-600"><p class="text-2xl font-extrabold text-emerald-600 dark:text-emerald-400" id="statSubjects">0</p><p class="text-xs text-gray-500 dark:text-gray-400 mt-1">المادة</p></div>
+          <div><p class="text-2xl font-extrabold text-amber-600 dark:text-amber-400">75%</p><p class="text-xs text-gray-500 dark:text-gray-400 mt-1">الإنجاز</p></div>
+        </div>
+        <div class="w-full bg-gray-200 dark:bg-slate-700 rounded-full h-2 mt-4 overflow-hidden"><div id="progressBar" class="bg-gradient-to-r from-emerald-400 to-emerald-600 h-full rounded-full" style="width: 0%"></div></div>
+      </div>
+    </div>
+
+    <div id="marqueeBar" class="mx-5 mb-6 py-2 px-4 rounded-xl text-sm font-bold marquee-container hidden" style="background: rgba(249, 115, 22, 0.15); backdrop-filter: blur(8px); border: 1px solid rgba(249, 115, 22, 0.3);">
+      <span id="marqueeText" class="marquee-text" style="color: #f97316;"></span>
+    </div>
+
+    <div id="homeScreen" class="p-4">
+      <div id="lessonsContainer" class="app-tab">
+        <div class="bg-white/70 dark:bg-slate-800/70 p-2 rounded-2xl shadow-sm border mb-5">
+          <div class="flex gap-2 items-center bg-slate-100/50 dark:bg-slate-900/50 rounded-xl px-4">
+            <i class="fas fa-search text-gray-400"></i>
+            <input id="searchInput" type="text" class="w-full p-3 bg-transparent border-none outline-none text-sm dark:text-gray-200" placeholder="ابحث عن درس..." oninput="searchLessons()">
+            <button id="searchClearBtn" onclick="clearSearch()" class="hidden text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"><i class="fas fa-times-circle"></i></button>
+          </div>
+        </div>
+        
+        <div id="gridView">
+          <h2 class="text-md font-bold text-gray-600 dark:text-gray-300 mb-3 flex items-center gap-2"><i class="fas fa-th-large text-indigo-500"></i> اختر المادة</h2>
+          <div id="lessonsGrid" class="grid grid-cols-2 gap-4"></div>
+          <div id="sliderContainer" class="mt-8 hidden">
+            <div class="rounded-2xl overflow-hidden shadow-lg bg-gray-200 dark:bg-slate-800 w-full" style="aspect-ratio: 16/9;"><img id="sliderImg" src="" class="w-full h-full object-cover transition-all duration-500"></div>
+          </div>
+        </div>
+
+        <div id="listView" style="display:none;">
+          <div class="flex items-center gap-3 mb-4"><button onclick="showGridView()" class="bg-white/70 dark:bg-slate-800 p-2 rounded-xl shadow-sm border text-gray-600"><i class="fas fa-arrow-right"></i></button><h2 id="listTitle" class="text-lg font-bold text-gray-800 dark:text-gray-200">المادة</h2></div>
+          <div id="lessonsList"></div>
+        </div>
+      </div>
+      <div id="savedContainer" class="app-tab hidden"><h2 class="text-xl font-bold text-gray-800 dark:text-gray-200 mb-4">دروسي المحفوظة</h2><div id="savedList"></div></div>
+      <div id="adsContainer" class="app-tab hidden"><h2 class="text-xl font-bold text-gray-800 dark:text-gray-200 mb-4">المعرض</h2><div id="adsList"></div></div>
+      <div id="examsContainer" class="app-tab hidden"><h2 class="text-xl font-bold text-gray-800 dark:text-gray-200 mb-4">مهم جدا</h2><div id="examsList"></div></div>
+    </div>
+  </div>
+
+  <div id="lessonFilesScreen" class="fixed inset-0 bg-slate-50 dark:bg-slate-900 z-[50] flex-col w-full pb-24" style="display:none;">
+    <div class="relative bg-gradient-to-br from-indigo-800 via-blue-800 to-blue-900 dark:from-slate-900 dark:to-slate-800 pt-10 pb-12 px-5 rounded-b-[2rem] shadow-xl overflow-hidden w-full">
+      <div id="headerBgLayerFiles" class="absolute inset-0 bg-cover bg-center opacity-20 mix-blend-overlay"></div>
+      <div class="relative z-10 flex flex-col items-center text-center text-white">
+        <button onclick="closeLessonFiles()" class="absolute top-4 right-4 bg-white/20 p-2 rounded-full"><i class="fas fa-arrow-right text-lg"></i></button>
+        <img src="https://img.icons8.com/3d-fluency/96/graduation-cap.png" class="w-16 h-16 mb-2">
+        <h1 class="text-2xl font-extrabold">ملحقات الدرس</h1>
+        <p id="filesLessonTitle" class="text-blue-200 mt-1 font-semibold text-md truncate w-full px-4">جاري التحميل...</p>
+      </div>
+    </div>
+    <div class="p-4 flex-1 overflow-y-auto w-full" id="filesContainer"></div>
+  </div>
+
+  <div id="viewerScreen" class="fixed inset-0 bg-white dark:bg-slate-900 z-[60] flex-col relative w-full" style="display:none;">
+    <div class="watermark">منصة إنجاز الأكاديمية</div>
+    <div class="sticky top-0 z-20 p-3 bg-white/95 dark:bg-slate-800/95 backdrop-blur-sm shadow-sm border-b border-gray-100 dark:border-slate-700 w-full">
+      <div class="flex justify-between items-center bg-slate-100 dark:bg-slate-700 p-2 rounded-2xl gap-2">
+        <button onclick="closeLesson()" class="flex items-center gap-2 bg-white dark:bg-slate-800 text-gray-700 dark:text-gray-200 font-bold px-4 py-2 rounded-xl shadow-sm flex-shrink-0"><i class="fas fa-arrow-right"></i> رجوع</button>
+        <h2 id="lessonTitle" class="font-bold text-sm truncate flex-1 text-center px-2 text-gray-800 dark:text-gray-200">عنوان الملف</h2>
+        <button onclick="printCurrentView()" class="flex items-center gap-2 bg-indigo-600 text-white font-bold px-4 py-2 rounded-xl shadow-sm flex-shrink-0"><i class="fas fa-file-pdf"></i> حفظ PDF</button>
+      </div>
+    </div>
+    <div class="flex-1 overflow-hidden bg-white dark:bg-slate-900 relative z-10 w-full"><iframe id="viewerFrame" class="w-full h-full" style="border: none; height: calc(100vh - 75px);"></iframe></div>
+  </div>
+
+  <nav id="navBar" class="fixed bottom-0 left-0 right-0 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md shadow-2xl border-t border-gray-100 dark:border-slate-800 z-[70] max-w-2xl mx-auto" style="border-radius: 1rem;">
+    <div class="flex justify-around items-center h-16">
+      <button id="nav-lessonsContainer" onclick="showAppTab('lessonsContainer')" class="nav-btn nav-active flex flex-col items-center justify-center w-full h-full"><i class="fas fa-th-large text-xl"></i><span class="mt-1">الرئيسية</span></button>
+      <button id="nav-savedContainer" onclick="showAppTab('savedContainer')" class="nav-btn flex flex-col items-center justify-center w-full h-full"><i class="fas fa-bookmark text-xl"></i><span class="mt-1">محفوظاتي</span></button>
+      <button id="nav-adsContainer" onclick="showAppTab('adsContainer')" class="nav-btn flex flex-col items-center justify-center w-full h-full"><i class="fas fa-images text-xl"></i><span class="mt-1">المعرض</span></button>
+      <button id="nav-examsContainer" onclick="showAppTab('examsContainer')" class="nav-btn flex flex-col items-center justify-center w-full h-full"><i class="fas fa-star text-xl"></i><span class="mt-1">مهم جدا</span></button>
+    </div>
+  </nav>
+
+</body>
+</html>
