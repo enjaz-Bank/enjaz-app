@@ -24,8 +24,8 @@
 
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
-  import { getFirestore, collection, onSnapshot, doc, getDoc, query, where, setDoc } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
-  import { getAuth, RecaptchaVerifier, signInWithPhoneNumber, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js";
+  import { getFirestore, collection, onSnapshot, doc, getDoc, query, where, setDoc, updateDoc, getDocs } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
+  import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js";
 
   const firebaseConfig = {
     apiKey: "AIzaSyAex1r9HHheqUgmjz6tbyLuob3yA4JXGfk",
@@ -52,7 +52,6 @@
   let sliderImages = [];
   let sliderIndex = 0;
   let sliderInterval = null;
-  let confirmationResult = null;
 
   const CACHE_KEY_LESSONS = 'enjaz_lessons_cache_v6';
   const CACHE_KEY_SETTINGS = 'enjaz_settings_cache_v6';
@@ -134,69 +133,86 @@
   window.showPremiumModal = function() { document.getElementById('premiumModal').classList.remove('hidden'); document.getElementById('premiumModal').classList.add('flex'); pushScreen('premiumModal'); };
   window.closePremiumModal = function() { requestBack(); };
 
-  // =========== نظام المصادقة برقم الهاتف (Phone OTP) ===========
+  // =========== نظام المصادقة (البريد الإلكتروني + كود التفعيل) ===========
   window.openAuthScreen = function() {
     document.getElementById('authScreen').classList.remove('hidden');
     document.getElementById('authScreen').classList.add('flex');
-    document.getElementById('phoneStep').classList.remove('hidden');
-    document.getElementById('otpStep').classList.add('hidden');
     document.getElementById('authError').classList.add('hidden');
     pushScreen('authScreen');
   }
   window.closeAuthScreen = function() { requestBack(); }
 
-  // تهيئة reCAPTCHA (تم التعديل لمنع التكرار)
-  window.setupRecaptcha = function() {
-    if (window.recaptchaVerifier) {
-      try { window.recaptchaVerifier.clear(); } catch(e){}
-    }
-    window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
-      'size': 'normal', // تم جعله ظاهراً لتسهيل الاختبار
-      'callback': (response) => { console.log("reCAPTCHA verified"); },
-      'expired-callback': () => { console.log("reCAPTCHA expired"); }
-    });
-  }
-
-  // إرسال الكود
-  window.sendOtp = async function() {
-    const phone = document.getElementById('authPhone').value;
+  window.handleAuth = async function() {
+    const email = document.getElementById('authEmail').value;
+    const pass = document.getElementById('authPass').value;
+    const isLogin = document.getElementById('authModeLogin').checked;
+    const btn = document.getElementById('authBtn');
     const errBox = document.getElementById('authError');
-    if(!phone || phone.length < 10) { errBox.innerText = "الرجاء إدخال رقم هاتف صحيح مع رمز الدولة"; errBox.classList.remove('hidden'); return; }
 
-    const btn = document.getElementById('sendOtpBtn');
-    btn.disabled = true; btn.innerText = "جاري الإرسال...";
+    if(!email || !pass) { errBox.innerText = "الرجاء إدخال البريد وكلمة المرور"; errBox.classList.remove('hidden'); return; }
+
+    btn.disabled = true;
+    btn.innerText = "جاري المعالجة...";
 
     try {
-      setupRecaptcha();
-      confirmationResult = await signInWithPhoneNumber(auth, phone, window.recaptchaVerifier);
-      document.getElementById('phoneStep').classList.add('hidden');
-      document.getElementById('otpStep').classList.remove('hidden');
+      if(isLogin) {
+        await signInWithEmailAndPassword(auth, email, pass);
+        closeAuthScreen();
+      } else {
+        const cred = await createUserWithEmailAndPassword(auth, email, pass);
+        await setDoc(doc(db, "users", cred.user.uid), { email: email, isPremium: false, createdAt: new Date() });
+        closeAuthScreen();
+      }
     } catch(e) {
       errBox.innerText = e.message.replace('Firebase:', '').trim();
       errBox.classList.remove('hidden');
-      btn.disabled = false; btn.innerText = "إرسال الكود";
-      if (window.recaptchaVerifier) { try { window.recaptchaVerifier.clear(); } catch(err){} window.recaptchaVerifier = null; }
+      btn.disabled = false;
+      btn.innerText = isLogin ? "تسجيل الدخول" : "إنشاء حساب جديد";
     }
   }
 
-  // التحقق من الكود
-  window.verifyOtp = async function() {
-    const code = document.getElementById('authCode').value;
-    const errBox = document.getElementById('authError');
-    if(!code || code.length < 6) { errBox.innerText = "الرجاء إدخال الكود المكون من 6 أرقام"; errBox.classList.remove('hidden'); return; }
+  window.toggleAuthMode = function() {
+    const isLogin = document.getElementById('authModeLogin').checked;
+    document.getElementById('authTitle').innerText = isLogin ? "تسجيل الدخول" : "إنشاء حساب جديد";
+    document.getElementById('authBtn').innerText = isLogin ? "تسجيل الدخول" : "إنشاء حساب جديد";
+    document.getElementById('authToggleText').innerText = isLogin ? "ليس لديك حساب؟ إنشاء حساب" : "لديك حساب بالفعل؟ تسجيل الدخول";
+    document.getElementById('authError').classList.add('hidden');
+  }
 
-    const btn = document.getElementById('verifyOtpBtn');
-    btn.disabled = true; btn.innerText = "جاري التحقق...";
+  // دالة تفعيل الكود التعليمي
+  window.redeemCode = async function() {
+    const codeInput = document.getElementById('redeemCodeInput').value.trim();
+    const errBox = document.getElementById('redeemError');
+    const successBox = document.getElementById('redeemSuccess');
+
+    if(!codeInput) { errBox.innerText = "الرجاء إدخال الكود"; errBox.classList.remove('hidden'); return; }
 
     try {
-      const cred = await confirmationResult.confirm(code);
-      const phone = document.getElementById('authPhone').value;
-      await setDoc(doc(db, "users", cred.user.uid), { phone: phone }, { merge: true });
-      closeAuthScreen();
+      const q = query(collection(db, "codes"), where("code", "==", codeInput), where("isUsed", "==", false));
+      const querySnapshot = await getDocs(q);
+      
+      if (querySnapshot.empty) {
+        errBox.innerText = "الكود غير صحيح أو مستخدم بالفعل";
+        errBox.classList.remove('hidden');
+        successBox.classList.add('hidden');
+        return;
+      }
+
+      const codeDoc = querySnapshot.docs[0];
+      // تحديث حالة الكود إلى مستخدم
+      await updateDoc(doc(db, "codes", codeDoc.id), { isUsed: true, usedBy: currentUser.uid, usedAt: new Date() });
+      // ترقية حساب الطالب
+      await updateDoc(doc(db, "users", currentUser.uid), { isPremium: true });
+      
+      currentUserData.isPremium = true;
+      errBox.classList.add('hidden');
+      successBox.classList.remove('hidden');
+      successBox.innerText = "تم تفعيل الاشتراك بنجاح! 🎉";
+      
+      setTimeout(() => { closePremiumModal(); }, 2000);
     } catch(e) {
-      errBox.innerText = "الكود غير صحيح، حاول مرة أخرى";
+      errBox.innerText = "حدث خطأ، حاول مرة أخرى";
       errBox.classList.remove('hidden');
-      btn.disabled = false; btn.innerText = "تأكيد الكود";
     }
   }
 
@@ -585,35 +601,58 @@
     <p class="text-white font-bold text-lg">جاري تحضير ملف PDF...</p>
   </div>
 
+  <!-- نافذة الدفع وتفعيل الكود -->
   <div id="premiumModal" class="fixed inset-0 z-[80] bg-black/50 hidden justify-center items-center p-4 backdrop-blur-sm">
     <div class="bg-white dark:bg-slate-800 rounded-3xl p-6 max-w-xs w-full text-center shadow-2xl">
       <div class="w-16 h-16 mx-auto bg-amber-100 dark:bg-amber-900/40 rounded-full flex items-center justify-center mb-4"><i class="fas fa-lock text-3xl text-amber-500"></i></div>
-      <h3 class="text-xl font-bold text-gray-800 dark:text-white mb-2">هذا محتوى مدفوع</h3>
-      <p class="text-gray-500 dark:text-gray-400 mb-6 text-sm">يرجى التواصل مع إدارة المنصة لتفعيل الاشتراك.</p>
-      <button onclick="closePremiumModal()" class="w-full bg-indigo-600 text-white p-3 rounded-xl font-bold">حسناً</button>
+      <h3 class="text-xl font-bold text-gray-800 dark:text-white mb-2">محتوى مدفوع</h3>
+      <p class="text-gray-500 dark:text-gray-400 mb-4 text-sm">لفتح هذا الدرس، قم بإدخال كود التفعيل الذي حصلت عليه.</p>
+      
+      <div id="redeemError" class="hidden bg-red-100 text-red-600 text-sm p-2 rounded-lg mb-3"></div>
+      <div id="redeemSuccess" class="hidden bg-green-100 text-green-600 text-sm p-2 rounded-lg mb-3"></div>
+
+      <input id="redeemCodeInput" type="text" placeholder="أدخل كود التفعيل هنا" class="w-full p-3 mb-3 text-center bg-gray-100 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl focus:outline-none focus:border-indigo-500">
+      <button onclick="redeemCode()" class="w-full bg-indigo-600 text-white p-3 rounded-xl font-bold mb-3">تفعيل الكود</button>
+      
+      <div class="border-t border-gray-100 dark:border-slate-700 pt-4 mt-2">
+        <p class="text-gray-500 dark:text-gray-400 text-sm mb-3">ليس لديك كود؟ احصل عليه الآن:</p>
+        <a href="https://wa.me/963993865879" target="_blank" class="flex items-center justify-center gap-2 bg-green-500 text-white p-3 rounded-xl font-bold">
+          <i class="fab fa-whatsapp text-xl"></i> تواصل عبر واتساب
+        </a>
+      </div>
+      <button onclick="closePremiumModal()" class="w-full mt-4 text-gray-400 hover:text-gray-600 text-sm">إغلاق</button>
     </div>
   </div>
 
+  <!-- شاشة تسجيل الدخول بالبريد -->
   <div id="authScreen" class="fixed inset-0 z-[90] bg-gradient-to-br from-indigo-800 via-blue-800 to-blue-900 hidden flex-col justify-center items-center p-6">
     <div class="bg-white/10 backdrop-blur-xl p-8 rounded-3xl shadow-2xl w-full max-w-sm border border-white/20">
       <button onclick="closeAuthScreen()" class="text-white mb-4 hover:bg-white/10 p-2 rounded-full"><i class="fas fa-arrow-right text-lg"></i></button>
       <div class="text-center text-white mb-8">
         <img src="https://img.icons8.com/3d-fluency/96/graduation-cap.png" class="w-20 h-20 mx-auto mb-3 drop-shadow-lg">
-        <h2 class="text-2xl font-extrabold">تسجيل الدخول</h2>
-        <p class="text-blue-200 text-sm mt-1">للوصول للمحتوى المدفوع، أدخل رقم هاتفك</p>
+        <h2 id="authTitle" class="text-2xl font-extrabold">تسجيل الدخول</h2>
+        <p class="text-blue-200 text-sm mt-1">للوصول للمحتوى المدفوع، أدخل بريدك وكلمة المرور</p>
       </div>
       
       <div id="authError" class="hidden bg-red-500/20 border border-red-400 text-red-200 text-sm p-3 rounded-lg mb-4 text-center"></div>
 
-      <div id="phoneStep">
-        <input id="authPhone" type="tel" placeholder="+9639xxxxxxxx" class="w-full p-3 mb-4 bg-white/10 text-white placeholder-blue-200 border border-white/20 rounded-xl focus:outline-none focus:border-white">
-        <div id="recaptcha-container" class="flex justify-center mb-4"></div>
-        <button id="sendOtpBtn" onclick="sendOtp()" class="w-full bg-white text-indigo-800 p-3 rounded-xl font-bold text-lg hover:bg-blue-100 transition">إرسال الكود</button>
+      <input id="authEmail" type="email" placeholder="البريد الإلكتروني" class="w-full p-3 mb-4 bg-white/10 text-white placeholder-blue-200 border border-white/20 rounded-xl focus:outline-none focus:border-white">
+      <input id="authPass" type="password" placeholder="كلمة المرور" class="w-full p-3 mb-6 bg-white/10 text-white placeholder-blue-200 border border-white/20 rounded-xl focus:outline-none focus:border-white">
+      
+      <button id="authBtn" onclick="handleAuth()" class="w-full bg-white text-indigo-800 p-3 rounded-xl font-bold text-lg hover:bg-blue-100 transition">تسجيل الدخول</button>
+      
+      <div class="text-center mt-6">
+        <label class="text-blue-200 text-sm cursor-pointer">
+          <input id="authModeLogin" type="checkbox" class="hidden" checked onchange="toggleAuthMode()">
+          <span id="authToggleText" onclick="document.getElementById('authModeLogin').click(); this.previousElementSibling.checked = !this.previousElementSibling.checked; toggleAuthMode();">ليس لديك حساب؟ إنشاء حساب</span>
+        </label>
       </div>
 
-      <div id="otpStep" class="hidden">
-        <input id="authCode" type="text" maxlength="6" placeholder="الكود المكون من 6 أرقام" class="w-full p-3 mb-4 bg-white/10 text-white placeholder-blue-200 border border-white/20 rounded-xl focus:outline-none focus:border-white text-center tracking-[0.5em] text-xl">
-        <button id="verifyOtpBtn" onclick="verifyOtp()" class="w-full bg-white text-indigo-800 p-3 rounded-xl font-bold text-lg hover:bg-blue-100 transition">تأكيد الكود</button>
+      <div class="border-t border-white/20 mt-6 pt-6 text-center">
+        <p class="text-blue-200 text-sm mb-3">ليس لديك بريد إلكتروني أو تريد شراء كود؟</p>
+        <a href="https://wa.me/963993865879" target="_blank" class="inline-flex items-center gap-2 bg-green-500 text-white px-4 py-2 rounded-xl font-bold text-sm">
+          <i class="fab fa-whatsapp text-lg"></i> تواصل معنا عبر واتساب
+        </a>
       </div>
     </div>
   </div>
@@ -628,11 +667,11 @@
     <div class="absolute top-4 left-4 z-30"><button onclick="toggleTheme()" class="ctrl-btn bg-white/20 backdrop-blur-md text-white"><i id="themeIcon" class="fas fa-moon text-lg"></i></button></div>
 
     <div id="socialMenu" class="hidden absolute top-16 right-4 w-56 bg-indigo-900/40 dark:bg-slate-900/60 backdrop-blur-xl rounded-2xl shadow-2xl py-2 z-30 border border-white/20">
-      <a href="https://wa.me/" target="_blank" class="flex items-center gap-3 px-4 py-3 text-white hover:bg-white/10"><i class="fab fa-whatsapp text-green-400 text-xl"></i> واتساب</a>
+      <a href="https://wa.me/963993865879" target="_blank" class="flex items-center gap-3 px-4 py-3 text-white hover:bg-white/10"><i class="fab fa-whatsapp text-green-400 text-xl"></i> واتساب</a>
       <a href="https://instagram.com/" target="_blank" class="flex items-center gap-3 px-4 py-3 text-white hover:bg-white/10"><i class="fab fa-instagram text-pink-400 text-xl"></i> انستغرام</a>
       <a href="tel:" class="flex items-center gap-3 px-4 py-3 text-white hover:bg-white/10"><i class="fas fa-phone text-blue-300 text-xl"></i> اتصال</a>
       <div class="border-t border-white/10 my-1"></div>
-      <a href="#" onclick="event.preventDefault(); requestBack(); setTimeout(()=>{ showPremiumModal(); }, 10);" class="flex items-center gap-3 px-4 py-3 text-white hover:bg-white/10"><i class="fas fa-crown text-amber-400 text-xl"></i> اشتراك</a>
+      <a href="#" onclick="event.preventDefault(); requestBack(); setTimeout(()=>{ showPremiumModal(); }, 10);" class="flex items-center gap-3 px-4 py-3 text-white hover:bg-white/10"><i class="fas fa-crown text-amber-400 text-xl"></i> تفعيل اشتراك</a>
       <button id="authBtnNav" onclick="openAuthScreen()" class="w-full flex items-center gap-3 px-4 py-3 text-white hover:bg-white/10"><i class="fas fa-right-to-bracket text-blue-300 text-xl"></i> تسجيل الدخول</button>
     </div>
 
