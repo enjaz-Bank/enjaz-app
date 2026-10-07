@@ -52,7 +52,7 @@
   let sliderImages = [];
   let sliderIndex = 0;
   let sliderInterval = null;
-  let confirmationResult = null; // لحفظ نتيجة إرسال الكود
+  let confirmationResult = null;
 
   const CACHE_KEY_LESSONS = 'enjaz_lessons_cache_v6';
   const CACHE_KEY_SETTINGS = 'enjaz_settings_cache_v6';
@@ -145,15 +145,16 @@
   }
   window.closeAuthScreen = function() { requestBack(); }
 
-  // تهيئة reCAPTCHA (لمنع الإساءة)
+  // تهيئة reCAPTCHA (تم التعديل لمنع التكرار)
   window.setupRecaptcha = function() {
-    if (!window.recaptchaVerifier) {
-      window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
-        'size': 'invisible',
-        'callback': (response) => { console.log("reCAPTCHA verified"); }
-      }, auth);
-      window.recaptchaVerifier.render();
+    if (window.recaptchaVerifier) {
+      try { window.recaptchaVerifier.clear(); } catch(e){}
     }
+    window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
+      'size': 'normal', // تم جعله ظاهراً لتسهيل الاختبار
+      'callback': (response) => { console.log("reCAPTCHA verified"); },
+      'expired-callback': () => { console.log("reCAPTCHA expired"); }
+    });
   }
 
   // إرسال الكود
@@ -162,11 +163,11 @@
     const errBox = document.getElementById('authError');
     if(!phone || phone.length < 10) { errBox.innerText = "الرجاء إدخال رقم هاتف صحيح مع رمز الدولة"; errBox.classList.remove('hidden'); return; }
 
-    setupRecaptcha();
     const btn = document.getElementById('sendOtpBtn');
     btn.disabled = true; btn.innerText = "جاري الإرسال...";
 
     try {
+      setupRecaptcha();
       confirmationResult = await signInWithPhoneNumber(auth, phone, window.recaptchaVerifier);
       document.getElementById('phoneStep').classList.add('hidden');
       document.getElementById('otpStep').classList.remove('hidden');
@@ -174,8 +175,7 @@
       errBox.innerText = e.message.replace('Firebase:', '').trim();
       errBox.classList.remove('hidden');
       btn.disabled = false; btn.innerText = "إرسال الكود";
-      // إعادة تعيين reCAPTCHA عند الفشل
-      if (window.recaptchaVerifier) { window.recaptchaVerifier.clear(); window.recaptchaVerifier = null; }
+      if (window.recaptchaVerifier) { try { window.recaptchaVerifier.clear(); } catch(err){} window.recaptchaVerifier = null; }
     }
   }
 
@@ -191,7 +191,6 @@
     try {
       const cred = await confirmationResult.confirm(code);
       const phone = document.getElementById('authPhone').value;
-      // إنشاء/تحديث وثيقة الطالب في قاعدة البيانات (merge: true حتى لا نحذف اشتراكاته إذا سجل دخوله مجدداً)
       await setDoc(doc(db, "users", cred.user.uid), { phone: phone }, { merge: true });
       closeAuthScreen();
     } catch(e) {
@@ -520,7 +519,6 @@
     });
   };
 
-  // مراقب حالة تسجيل الدخول
   onAuthStateChanged(auth, async (user) => {
     const authBtn = document.getElementById('authBtnNav');
     
@@ -596,7 +594,6 @@
     </div>
   </div>
 
-  <!-- شاشة تسجيل الدخول برقم الهاتف -->
   <div id="authScreen" class="fixed inset-0 z-[90] bg-gradient-to-br from-indigo-800 via-blue-800 to-blue-900 hidden flex-col justify-center items-center p-6">
     <div class="bg-white/10 backdrop-blur-xl p-8 rounded-3xl shadow-2xl w-full max-w-sm border border-white/20">
       <button onclick="closeAuthScreen()" class="text-white mb-4 hover:bg-white/10 p-2 rounded-full"><i class="fas fa-arrow-right text-lg"></i></button>
@@ -608,20 +605,16 @@
       
       <div id="authError" class="hidden bg-red-500/20 border border-red-400 text-red-200 text-sm p-3 rounded-lg mb-4 text-center"></div>
 
-      <!-- الخطوة 1: إدخال الرقم -->
       <div id="phoneStep">
         <input id="authPhone" type="tel" placeholder="+9639xxxxxxxx" class="w-full p-3 mb-4 bg-white/10 text-white placeholder-blue-200 border border-white/20 rounded-xl focus:outline-none focus:border-white">
+        <div id="recaptcha-container" class="flex justify-center mb-4"></div>
         <button id="sendOtpBtn" onclick="sendOtp()" class="w-full bg-white text-indigo-800 p-3 rounded-xl font-bold text-lg hover:bg-blue-100 transition">إرسال الكود</button>
       </div>
 
-      <!-- الخطوة 2: إدخال الكود -->
       <div id="otpStep" class="hidden">
         <input id="authCode" type="text" maxlength="6" placeholder="الكود المكون من 6 أرقام" class="w-full p-3 mb-4 bg-white/10 text-white placeholder-blue-200 border border-white/20 rounded-xl focus:outline-none focus:border-white text-center tracking-[0.5em] text-xl">
         <button id="verifyOtpBtn" onclick="verifyOtp()" class="w-full bg-white text-indigo-800 p-3 rounded-xl font-bold text-lg hover:bg-blue-100 transition">تأكيد الكود</button>
       </div>
-      
-      <!-- حاوية reCAPTCHA (مطلوبة من Firebase) -->
-      <div id="recaptcha-container" class="mt-6 flex justify-center"></div>
     </div>
   </div>
 
