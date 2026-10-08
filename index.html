@@ -24,7 +24,7 @@
 
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
-  import { getFirestore, collection, onSnapshot, doc, getDoc, query, where, setDoc, updateDoc, getDocs } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
+  import { getFirestore, collection, onSnapshot, doc, getDoc, query, where, setDoc, updateDoc, getDocs, deleteDoc, arrayUnion } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
   import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js";
 
   const firebaseConfig = {
@@ -45,16 +45,16 @@
   let currentUserData = null;
   let lessonsData = [];
   let currentView = "grid";
-  let bookmarks = JSON.parse(localStorage.getItem('enjaz_bookmarks')) || [];
+  let bookmarks = [];
+  let cart = []; // سلة المشتريات (تحتوي على {id, name})
   let currentLessonFiles = [];
   let currentViewingFile = null;
-  let activeListeners = { lessons: null, files: null, ads: null, exams: null, slider: null };
+  let activeListeners = { lessons: null, files: null, ads: null, exams: null, slider: null, bookmarks: null };
   let sliderImages = [];
   let sliderIndex = 0;
   let sliderInterval = null;
 
   const CACHE_KEY_LESSONS = 'enjaz_lessons_cache_v6';
-  const CACHE_KEY_SETTINGS = 'enjaz_settings_cache_v6';
 
   const fixedSubjects = [
     { name: "رياضيات", color: "from-purple-500 to-purple-700", icon: "fa-square-root-variable" },
@@ -87,10 +87,22 @@
         document.getElementById('appFrame').style.display = 'block';
         if (activeListeners.files) { activeListeners.files(); activeListeners.files = null; }
         break;
+      case 'packagesScreen':
+        document.getElementById('packagesScreen').style.display = 'none';
+        document.getElementById('appFrame').style.display = 'block';
+        break;
+      case 'cartScreen':
+        document.getElementById('cartScreen').style.display = 'none';
+        document.getElementById('appFrame').style.display = 'block';
+        break;
       case 'subjectList':
         document.getElementById('listView').style.display = 'none';
         document.getElementById('gridView').style.display = 'block';
         currentView = 'grid';
+        break;
+      case 'singleBuyModal':
+        document.getElementById('singleBuyModal').classList.add('hidden');
+        document.getElementById('singleBuyModal').classList.remove('flex');
         break;
       case 'premiumModal':
         document.getElementById('premiumModal').classList.add('hidden');
@@ -118,6 +130,8 @@
     document.getElementById('nav-'+tabName).classList.add('nav-active');
     document.getElementById('lessonFilesScreen').style.display = 'none';
     document.getElementById('viewerScreen').style.display = 'none';
+    document.getElementById('packagesScreen').style.display = 'none';
+    document.getElementById('cartScreen').style.display = 'none';
     document.getElementById('appFrame').style.display = 'block';
     if (tabName === 'lessonsContainer') { document.getElementById('listView').style.display = 'none'; document.getElementById('gridView').style.display = 'block'; currentView = 'grid'; }
     if (tabName === 'savedContainer') renderBookmarks();
@@ -130,17 +144,29 @@
   };
 
   window.toggleMenu = function() { const menu = document.getElementById('socialMenu'); if (menu.classList.contains('hidden')) { menu.classList.remove('hidden'); pushScreen('socialMenu'); } else { requestBack(); } };
+  
+  window.openPackagesScreen = function() { document.getElementById('packagesScreen').style.display = 'flex'; document.getElementById('appFrame').style.display = 'none'; pushScreen('packagesScreen'); loadPackages(); }
+  window.closePackagesScreen = function() { requestBack(); }
+
+  window.openCartScreen = function() { document.getElementById('cartScreen').style.display = 'flex'; document.getElementById('appFrame').style.display = 'none'; pushScreen('cartScreen'); renderCart(); }
+  window.closeCartScreen = function() { requestBack(); }
+
   window.showPremiumModal = function() { document.getElementById('premiumModal').classList.remove('hidden'); document.getElementById('premiumModal').classList.add('flex'); pushScreen('premiumModal'); };
   window.closePremiumModal = function() { requestBack(); };
 
-  // =========== نظام المصادقة (البريد الإلكتروني + كود التفعيل) ===========
-  window.openAuthScreen = function() {
-    document.getElementById('authScreen').classList.remove('hidden');
-    document.getElementById('authScreen').classList.add('flex');
-    document.getElementById('authError').classList.add('hidden');
-    pushScreen('authScreen');
-  }
+  window.openSingleBuyModal = function() { document.getElementById('singleBuyModal').classList.remove('hidden'); document.getElementById('singleBuyModal').classList.add('flex'); pushScreen('singleBuyModal'); }
+  window.closeSingleBuyModal = function() { requestBack(); }
+
+  // =========== نظام المصادقة ===========
+  window.openAuthScreen = function() { document.getElementById('authScreen').classList.remove('hidden'); document.getElementById('authScreen').classList.add('flex'); document.getElementById('authError').classList.add('hidden'); pushScreen('authScreen'); }
   window.closeAuthScreen = function() { requestBack(); }
+
+  window.togglePasswordVisibility = function() {
+    const passInput = document.getElementById('authPass');
+    const passIcon = document.getElementById('passIcon');
+    if (passInput.type === 'password') { passInput.type = 'text'; passIcon.classList.replace('fa-eye', 'fa-eye-slash'); }
+    else { passInput.type = 'password'; passIcon.classList.replace('fa-eye-slash', 'fa-eye'); }
+  }
 
   window.handleAuth = async function() {
     const email = document.getElementById('authEmail').value;
@@ -148,26 +174,19 @@
     const isLogin = document.getElementById('authModeLogin').checked;
     const btn = document.getElementById('authBtn');
     const errBox = document.getElementById('authError');
-
     if(!email || !pass) { errBox.innerText = "الرجاء إدخال البريد وكلمة المرور"; errBox.classList.remove('hidden'); return; }
-
-    btn.disabled = true;
-    btn.innerText = "جاري المعالجة...";
-
+    btn.disabled = true; btn.innerText = "جاري المعالجة...";
     try {
-      if(isLogin) {
-        await signInWithEmailAndPassword(auth, email, pass);
-        closeAuthScreen();
-      } else {
+      if(isLogin) { await signInWithEmailAndPassword(auth, email, pass); closeAuthScreen(); }
+      else {
         const cred = await createUserWithEmailAndPassword(auth, email, pass);
-        await setDoc(doc(db, "users", cred.user.uid), { email: email, isPremium: false, createdAt: new Date() });
+        await setDoc(doc(db, "users", cred.user.uid), { email: email, activePackages: [], purchasedFiles: [], createdAt: new Date() });
         closeAuthScreen();
       }
     } catch(e) {
       errBox.innerText = e.message.replace('Firebase:', '').trim();
       errBox.classList.remove('hidden');
-      btn.disabled = false;
-      btn.innerText = isLogin ? "تسجيل الدخول" : "إنشاء حساب جديد";
+      btn.disabled = false; btn.innerText = isLogin ? "تسجيل الدخول" : "إنشاء حساب جديد";
     }
   }
 
@@ -179,62 +198,175 @@
     document.getElementById('authError').classList.add('hidden');
   }
 
-  // دالة تفعيل الكود التعليمي
+  // =========== سلة المشتريات ===========
+  window.addToCart = function(fileId, fileName) {
+    if(!cart.some(f => f.id === fileId)) cart.push({ id: fileId, name: fileName });
+    updateCartBadge();
+    closeSingleBuyModal();
+    alert("تمت الإضافة إلى السلة 🛒");
+  }
+
+  window.updateCartBadge = function() {
+    const badge = document.getElementById('cartBadge');
+    if(cart.length > 0) { badge.classList.remove('hidden'); badge.innerText = cart.length; }
+    else { badge.classList.add('hidden'); }
+  }
+
+  window.renderCart = function() {
+    const c = document.getElementById('cartList');
+    if(cart.length === 0) {
+      c.innerHTML = `<div class="text-center mt-20 text-gray-400"><i class="fas fa-shopping-cart text-5xl mb-4 block"></i><p>سلتك فارغة.</p></div>`;
+      return;
+    }
+    let html = `<div class="space-y-3 mt-2">`;
+    cart.forEach(file => {
+      html += `<div class="bg-white dark:bg-slate-800 p-3 rounded-xl shadow-sm border flex justify-between items-center">
+        <div><h4 class="font-bold text-sm text-gray-800 dark:text-gray-200">${file.name}</h4></div>
+        <button onclick="removeFromCart('${file.id}')" class="text-red-500 p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20"><i class="fas fa-trash"></i></button>
+      </div>`;
+    });
+    html += `</div>
+    <div class="mt-6">
+      <button onclick="showPremiumModal()" class="w-full bg-indigo-600 text-white p-3 rounded-xl font-bold mb-3">شراء المحتويات (إدخال كود)</button>
+      <a href="https://wa.me/963993865879?text=أرغب%20بشراء%20الدروس%20التالية:%20${cart.map(f => f.name).join(', ')}" target="_blank" class="w-full bg-green-500 text-white p-3 rounded-xl font-bold flex items-center justify-center gap-2">
+        <i class="fab fa-whatsapp text-xl"></i> إرسال القائمة للشراء عبر واتساب
+      </a>
+    </div>`;
+    c.innerHTML = html;
+  }
+
+  window.removeFromCart = function(fileId) {
+    cart = cart.filter(f => f.id !== fileId);
+    updateCartBadge();
+    renderCart();
+  }
+
+  // دالة تفعيل الكود (الخاصة بالباقات والسلة والدروس المفردة)
   window.redeemCode = async function() {
     const codeInput = document.getElementById('redeemCodeInput').value.trim();
     const errBox = document.getElementById('redeemError');
     const successBox = document.getElementById('redeemSuccess');
-
     if(!codeInput) { errBox.innerText = "الرجاء إدخال الكود"; errBox.classList.remove('hidden'); return; }
-
     try {
       const q = query(collection(db, "codes"), where("code", "==", codeInput), where("isUsed", "==", false));
       const querySnapshot = await getDocs(q);
-      
-      if (querySnapshot.empty) {
-        errBox.innerText = "الكود غير صحيح أو مستخدم بالفعل";
-        errBox.classList.remove('hidden');
-        successBox.classList.add('hidden');
-        return;
-      }
+      if (querySnapshot.empty) { errBox.innerText = "الكود غير صحيح أو مستخدم بالفعل"; errBox.classList.remove('hidden'); successBox.classList.add('hidden'); return; }
 
       const codeDoc = querySnapshot.docs[0];
-      // تحديث حالة الكود إلى مستخدم
-      await updateDoc(doc(db, "codes", codeDoc.id), { isUsed: true, usedBy: currentUser.uid, usedAt: new Date() });
-      // ترقية حساب الطالب
-      await updateDoc(doc(db, "users", currentUser.uid), { isPremium: true });
+      const codeData = codeDoc.data();
       
-      currentUserData.isPremium = true;
+      await updateDoc(doc(db, "codes", codeDoc.id), { isUsed: true, usedBy: currentUser.uid, usedAt: new Date() });
+      
+      let userUpdate = {};
+      currentUserData.activePackages = currentUserData.activePackages || [];
+      currentUserData.purchasedFiles = currentUserData.purchasedFiles || [];
+
+      if(codeData.type === 'package') {
+        userUpdate.activePackages = arrayUnion(codeData.targetId);
+        if(!currentUserData.activePackages.includes(codeData.targetId)) currentUserData.activePackages.push(codeData.targetId);
+        cart = []; 
+        updateCartBadge();
+      } else if(codeData.type === 'file') {
+        userUpdate.purchasedFiles = arrayUnion(codeData.targetId);
+        if(!currentUserData.purchasedFiles.includes(codeData.targetId)) currentUserData.purchasedFiles.push(codeData.targetId);
+        cart = cart.filter(f => f.id !== codeData.targetId); 
+        updateCartBadge();
+      } else if(codeData.type === 'cart') {
+        let cartFileIds = cart.map(f => f.id);
+        if(cartFileIds.length > 0) {
+          userUpdate.purchasedFiles = arrayUnion(...cartFileIds);
+          cartFileIds.forEach(id => { if(!currentUserData.purchasedFiles.includes(id)) currentUserData.purchasedFiles.push(id); });
+        }
+        cart = []; 
+        updateCartBadge();
+      }
+
+      await updateDoc(doc(db, "users", currentUser.uid), userUpdate);
+      
       errBox.classList.add('hidden');
       successBox.classList.remove('hidden');
-      successBox.innerText = "تم تفعيل الاشتراك بنجاح! 🎉";
-      
-      setTimeout(() => { closePremiumModal(); }, 2000);
-    } catch(e) {
-      errBox.innerText = "حدث خطأ، حاول مرة أخرى";
-      errBox.classList.remove('hidden');
-    }
+      successBox.innerText = "تم تفعيل الكود بنجاح! 🎉";
+      setTimeout(() => { closePremiumModal(); }, 1500);
+
+    } catch(e) { errBox.innerText = "حدث خطأ، حاول مرة أخرى: " + e.message; errBox.classList.remove('hidden'); }
   }
 
-  window.handleLogout = function() {
-    signOut(auth).then(() => { requestBack(); });
-  }
-  // ========================================================
+  window.handleLogout = function() { signOut(auth).then(() => { requestBack(); }); }
 
+  // =========== الباقات ===========
+  window.loadPackages = async function() {
+    const c = document.getElementById('packagesContainer');
+    c.innerHTML = `<div class="text-center mt-10"><div class="w-8 h-8 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin mx-auto"></div></div>`;
+    try {
+      const docSnap = await getDoc(doc(db, "settings", "packages"));
+      if(docSnap.exists()) {
+        const data = docSnap.data();
+        let html = `<div class="flex flex-col gap-6 mt-4">`;
+        for(let i=1; i<=3; i++) {
+          const pkg = data[`pkg${i}`];
+          if(pkg && pkg.title) {
+            const isFull = i === 1;
+            const borderColor = isFull ? 'border-amber-400' : (i === 2 ? 'border-gray-300' : 'border-orange-300');
+            const badge = isFull ? '<span class="absolute top-0 right-1/2 translate-x-1/2 -mt-3 bg-amber-500 text-white text-[10px] px-3 py-1 rounded-full font-bold">الأكثر طلباً</span>' : '';
+            const btnColor = isFull ? 'bg-amber-500 hover:bg-amber-600' : 'bg-indigo-600 hover:bg-indigo-700';
+            
+            html += `
+            <div class="relative bg-white dark:bg-slate-800 border-2 ${borderColor} rounded-2xl shadow-lg p-6 flex flex-col items-center text-center transform hover:scale-105 transition-transform duration-300">
+              ${badge}
+              <h3 class="font-extrabold text-xl mb-2 text-gray-800 dark:text-white">${pkg.title}</h3>
+              <p class="text-gray-500 dark:text-gray-400 text-sm mb-4 min-h-[40px]">${pkg.desc || ''}</p>
+              <div class="text-3xl font-extrabold text-indigo-600 dark:text-indigo-400 mb-6">${pkg.price || 'مجاني'}</div>
+              <button onclick="showPremiumModal()" class="${btnColor} w-full text-white px-4 py-3 rounded-xl font-bold text-sm transition">اشترك الآن</button>
+            </div>`;
+          }
+        }
+        html += `</div>
+        <div class="mt-8 bg-gray-50 dark:bg-slate-800 p-4 rounded-xl border text-center">
+          <p class="text-gray-500 text-sm mb-3">ليس لديك كود؟ تواصل معنا للحصول عليه:</p>
+          <a href="https://wa.me/963993865879" target="_blank" class="inline-flex items-center gap-2 bg-green-500 text-white px-4 py-2 rounded-xl font-bold text-sm">
+            <i class="fab fa-whatsapp text-lg"></i> تواصل عبر واتساب
+          </a>
+        </div>`;
+        c.innerHTML = html;
+      } else {
+        c.innerHTML = "<p class='text-center text-gray-400 mt-10'>لا توجد باقات متاحة حالياً.</p>";
+      }
+    } catch(e) { c.innerHTML = "<p class='text-center text-red-500 mt-10'>خطأ في تحميل الباقات.</p>"; }
+  }
+
+  // =========== المفضلة (Bookmarks) ===========
+  window.loadBookmarks = function() {
+    if (activeListeners.bookmarks) activeListeners.bookmarks();
+    activeListeners.bookmarks = onSnapshot(collection(db, "users", currentUser.uid, "bookmarks"), (snap) => {
+      bookmarks = [];
+      snap.forEach(d => bookmarks.push(d.id));
+      if (!document.getElementById('savedContainer').classList.contains('hidden')) renderBookmarks();
+    });
+  }
+
+  window.toggleBookmark = async function(id, event) {
+    event.stopPropagation();
+    if (!currentUser) { openAuthScreen(); return; }
+    const ref = doc(db, "users", currentUser.uid, "bookmarks", id);
+    if (bookmarks.includes(id)) { await deleteDoc(ref); } 
+    else { await setDoc(ref, { createdAt: new Date() }); }
+  }
+
+  // =========== الكاش والإعدادات ===========
   function saveLessonsCache() { try { localStorage.setItem(CACHE_KEY_LESSONS, JSON.stringify(lessonsData)); } catch (e) {} }
   function loadLessonsCache() { try { const raw = localStorage.getItem(CACHE_KEY_LESSONS); if (!raw) return false; const arr = JSON.parse(raw); if (!Array.isArray(arr)) return false; lessonsData = arr; updateStats(); renderGrid(); return true; } catch (e) { return false; } }
 
   function applyHeaderBg(bgUrl) { const layer = document.getElementById('headerBgLayer'); if (layer) layer.style.backgroundImage = `url(${bgUrl})`; const filesHeader = document.getElementById('headerBgLayerFiles'); if (filesHeader) filesHeader.style.backgroundImage = `url(${bgUrl})`; }
 
   window.loadAppSettings = async function() {
-    try { const cached = localStorage.getItem(CACHE_KEY_SETTINGS); if (cached) { const bg = JSON.parse(cached); if (bg.headerBg) applyHeaderBg(bg.headerBg); applyMarquee(bg.marqueeText, bg.marqueeSpeed, bg.marqueeColor); } } catch (e) {}
+    try { const cached = localStorage.getItem('enjaz_settings_cache_v6'); if (cached) { const bg = JSON.parse(cached); if (bg.headerBg) applyHeaderBg(bg.headerBg); applyMarquee(bg.marqueeText, bg.marqueeSpeed, bg.marqueeColor); } } catch (e) {}
     try {
       const docSnap = await getDoc(doc(db, "settings", "appConfig"));
       if (docSnap.exists()) {
         const data = docSnap.data();
         if (data.headerBg) applyHeaderBg(data.headerBg);
         applyMarquee(data.marqueeText, data.marqueeSpeed, data.marqueeColor);
-        try { localStorage.setItem(CACHE_KEY_SETTINGS, JSON.stringify({ headerBg: data.headerBg, marqueeText: data.marqueeText, marqueeSpeed: data.marqueeSpeed, marqueeColor: data.marqueeColor })); } catch (e) {}
+        try { localStorage.setItem('enjaz_settings_cache_v6', JSON.stringify({ headerBg: data.headerBg, marqueeText: data.marqueeText, marqueeSpeed: data.marqueeSpeed, marqueeColor: data.marqueeColor })); } catch (e) {}
       }
     } catch (e) {}
   };
@@ -243,13 +375,10 @@
     const bar = document.getElementById('marqueeBar');
     const txtEl = document.getElementById('marqueeText');
     if(text && text.trim() !== "") {
-      txtEl.innerText = text;
-      bar.classList.remove('hidden');
+      txtEl.innerText = text; bar.classList.remove('hidden');
       if(speed) txtEl.style.animationDuration = speed + 's';
       if(color) txtEl.style.color = color;
-    } else {
-      bar.classList.add('hidden');
-    }
+    } else { bar.classList.add('hidden'); }
   }
 
   window.loadSlider = function() {
@@ -268,9 +397,7 @@
             document.getElementById('sliderImg').src = sliderImages[sliderIndex];
           }, 4000);
         }
-      } else {
-        container.classList.add('hidden');
-      }
+      } else { container.classList.add('hidden'); }
     });
   };
 
@@ -308,13 +435,6 @@
     document.getElementById('lessonsGrid').innerHTML = finalHTML;
   };
 
-  window.toggleBookmark = function(id, event) {
-    event.stopPropagation();
-    if (bookmarks.includes(id)) bookmarks = bookmarks.filter(b => b !== id); else bookmarks.push(id);
-    localStorage.setItem('enjaz_bookmarks', JSON.stringify(bookmarks));
-    if (!document.getElementById('savedContainer').classList.contains('hidden')) renderBookmarks();
-  };
-
   function renderLessonCard(lesson) {
     let isBookmarked = bookmarks.includes(lesson.id);
     let starClass = isBookmarked ? 'fa-solid text-amber-400' : 'fa-regular text-gray-300 dark:text-gray-600';
@@ -349,21 +469,14 @@
     document.getElementById('searchClearBtn').classList.add('hidden');
   };
 
-  window.clearSearch = function() {
-    document.getElementById('searchInput').value = '';
-    showGridView();
-  };
+  window.clearSearch = function() { document.getElementById('searchInput').value = ''; showGridView(); };
 
   window.searchLessons = function() {
     const input = document.getElementById('searchInput');
     const clearBtn = document.getElementById('searchClearBtn');
     const query = input.value.toLowerCase();
-    
-    if(query.length > 0) clearBtn.classList.remove('hidden');
-    else clearBtn.classList.add('hidden');
-
+    if(query.length > 0) clearBtn.classList.remove('hidden'); else clearBtn.classList.add('hidden');
     if (query.trim() === "") { showGridView(); return; }
-    
     document.getElementById('listTitle').innerText = "نتائج البحث";
     const container = document.getElementById('lessonsList');
     const filteredLessons = lessonsData.filter(l => l.title.toLowerCase().includes(query));
@@ -452,11 +565,15 @@
     if (!f) return;
     
     if (f.isPremium) {
-      if (!currentUser) {
-        openAuthScreen();
-        return;
-      } else if (!currentUserData || !currentUserData.isPremium) {
-        showPremiumModal();
+      if (!currentUser) { openAuthScreen(); return; }
+      
+      const hasPackage = currentUserData?.activePackages?.length > 0;
+      const hasFile = currentUserData?.purchasedFiles?.includes(f.id);
+      
+      if (!hasPackage && !hasFile) {
+        document.getElementById('singleBuyFileName').innerText = f.fileName;
+        document.getElementById('addSingleToCartBtn').onclick = function() { addToCart(f.id, f.fileName); };
+        openSingleBuyModal();
         return;
       }
     }
@@ -482,21 +599,16 @@
 
   window.printCurrentView = function() {
     if (!currentViewingFile) return;
-    if (currentViewingFile.isExternal || currentViewingFile.isPdf) {
-      window.open(currentViewingFile.fileData, '_blank');
-      return;
-    }
+    if (currentViewingFile.isExternal || currentViewingFile.isPdf) { window.open(currentViewingFile.fileData, '_blank'); return; }
     const frame = document.getElementById('viewerFrame');
     if (!frame || !frame.contentWindow) { alert("لا يمكن الطباعة."); return; }
     const overlay = document.getElementById('pdfLoadingOverlay');
     overlay.classList.remove('hidden'); overlay.classList.add('flex');
-    
     try {
       const fileTitle = currentViewingFile.fileName || 'درس';
       const originalTitle = document.title;
       document.title = fileTitle;
       try { frame.contentDocument.title = fileTitle; } catch(e){}
-
       setTimeout(() => {
         frame.contentWindow.focus();
         frame.contentWindow.print();
@@ -537,26 +649,23 @@
 
   onAuthStateChanged(auth, async (user) => {
     const authBtn = document.getElementById('authBtnNav');
-    
     if (user) {
       currentUser = user;
       authBtn.classList.remove('hidden');
       authBtn.innerText = "تسجيل الخروج";
       authBtn.onclick = handleLogout;
-
       try {
         const userDoc = await getDoc(doc(db, "users", user.uid));
-        if (userDoc.exists()) {
-          currentUserData = userDoc.data();
-        } else {
-          currentUserData = { isPremium: false };
-        }
-      } catch(e) {
-        currentUserData = { isPremium: false };
-      }
+        if (userDoc.exists()) { currentUserData = userDoc.data(); }
+        else { currentUserData = { activePackages: [], purchasedFiles: [] }; }
+        loadBookmarks(); 
+      } catch(e) { currentUserData = { activePackages: [], purchasedFiles: [] }; }
     } else {
       currentUser = null;
       currentUserData = null;
+      bookmarks = [];
+      cart = [];
+      updateCartBadge();
       authBtn.classList.remove('hidden');
       authBtn.innerText = "تسجيل الدخول";
       authBtn.onclick = openAuthScreen;
@@ -566,13 +675,7 @@
   window.onload = function() {
     if (localStorage.getItem('enjaz_theme') === 'dark') { document.documentElement.classList.add('dark'); document.getElementById('themeIcon').className = 'fas fa-sun text-lg'; }
     try { history.replaceState({ level: 0 }, ''); } catch (e) {}
-    
-    window.loadAppLessons(); 
-    window.loadAppAds(); 
-    window.loadAppExams(); 
-    window.loadAppSettings(); 
-    window.loadSlider();
-
+    window.loadAppLessons(); window.loadAppAds(); window.loadAppExams(); window.loadAppSettings(); window.loadSlider();
     setTimeout(() => { document.getElementById('splashScreen').classList.add('opacity-0'); setTimeout(() => document.getElementById('splashScreen').style.display = 'none', 500); }, 1200);
   };
 </script>
@@ -590,8 +693,8 @@
   .dark .watermark { color: rgba(255, 255, 255, 0.1); }
   .ctrl-btn { width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border-radius: 12px; }
   .marquee-container { overflow: hidden; white-space: nowrap; }
-  .marquee-text { display: inline-block; padding-right: 100%; animation: marquee 15s linear infinite; }
-  @keyframes marquee { 0% { transform: translateX(100%); } 100% { transform: translateX(0%); } }
+  .marquee-text { display: inline-block; padding-left: 100%; animation: marquee 15s linear infinite; }
+  @keyframes marquee { 0% { transform: translateX(-100%); } 100% { transform: translateX(0%); } }
 </style>
 </head>
 <body class="text-gray-800 dark:text-gray-200 flex justify-center">
@@ -601,58 +704,61 @@
     <p class="text-white font-bold text-lg">جاري تحضير ملف PDF...</p>
   </div>
 
-  <!-- نافذة الدفع وتفعيل الكود -->
-  <div id="premiumModal" class="fixed inset-0 z-[80] bg-black/50 hidden justify-center items-center p-4 backdrop-blur-sm">
+  <!-- نافذة شراء درس مفرد أو إضافته للسلة -->
+  <div id="singleBuyModal" class="fixed inset-0 z-[80] bg-black/50 hidden justify-center items-center p-4 backdrop-blur-sm">
     <div class="bg-white dark:bg-slate-800 rounded-3xl p-6 max-w-xs w-full text-center shadow-2xl">
       <div class="w-16 h-16 mx-auto bg-amber-100 dark:bg-amber-900/40 rounded-full flex items-center justify-center mb-4"><i class="fas fa-lock text-3xl text-amber-500"></i></div>
-      <h3 class="text-xl font-bold text-gray-800 dark:text-white mb-2">محتوى مدفوع</h3>
-      <p class="text-gray-500 dark:text-gray-400 mb-4 text-sm">لفتح هذا الدرس، قم بإدخال كود التفعيل الذي حصلت عليه.</p>
+      <h3 class="text-lg font-bold text-gray-800 dark:text-white mb-1">درس مدفوع</h3>
+      <p id="singleBuyFileName" class="text-gray-500 dark:text-gray-400 mb-4 text-sm truncate"></p>
       
+      <button id="addSingleToCartBtn" class="w-full bg-blue-500 text-white p-3 rounded-xl font-bold mb-3">إضافة إلى السلة 🛒</button>
+      <button onclick="closeSingleBuyModal(); openPackagesScreen();" class="w-full bg-amber-500 text-white p-3 rounded-xl font-bold mb-3">عرض الباقات الكاملة 👑</button>
+      
+      <button onclick="closeSingleBuyModal()" class="w-full mt-2 text-gray-400 hover:text-gray-600 text-sm">رجوع</button>
+    </div>
+  </div>
+
+  <!-- نافذة إدخال الكود -->
+  <div id="premiumModal" class="fixed inset-0 z-[80] bg-black/50 hidden justify-center items-center p-4 backdrop-blur-sm">
+    <div class="bg-white dark:bg-slate-800 rounded-3xl p-6 max-w-xs w-full text-center shadow-2xl">
+      <div class="w-16 h-16 mx-auto bg-amber-100 dark:bg-amber-900/40 rounded-full flex items-center justify-center mb-4"><i class="fas fa-key text-3xl text-amber-500"></i></div>
+      <h3 class="text-xl font-bold text-gray-800 dark:text-white mb-2">تفعيل الكود</h3>
+      <p class="text-gray-500 dark:text-gray-400 mb-4 text-sm">أدخل كود التفعيل لفتح المحتوى.</p>
       <div id="redeemError" class="hidden bg-red-100 text-red-600 text-sm p-2 rounded-lg mb-3"></div>
       <div id="redeemSuccess" class="hidden bg-green-100 text-green-600 text-sm p-2 rounded-lg mb-3"></div>
-
-      <input id="redeemCodeInput" type="text" placeholder="أدخل كود التفعيل هنا" class="w-full p-3 mb-3 text-center bg-gray-100 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl focus:outline-none focus:border-indigo-500">
-      <button onclick="redeemCode()" class="w-full bg-indigo-600 text-white p-3 rounded-xl font-bold mb-3">تفعيل الكود</button>
-      
+      <input id="redeemCodeInput" type="text" placeholder="أدخل الكود هنا" class="w-full p-3 mb-3 text-center bg-gray-100 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl focus:outline-none focus:border-indigo-500">
+      <button onclick="redeemCode()" class="w-full bg-indigo-600 text-white p-3 rounded-xl font-bold mb-3">تفعيل</button>
       <div class="border-t border-gray-100 dark:border-slate-700 pt-4 mt-2">
-        <p class="text-gray-500 dark:text-gray-400 text-sm mb-3">ليس لديك كود؟ احصل عليه الآن:</p>
         <a href="https://wa.me/963993865879" target="_blank" class="flex items-center justify-center gap-2 bg-green-500 text-white p-3 rounded-xl font-bold">
-          <i class="fab fa-whatsapp text-xl"></i> تواصل عبر واتساب
+          <i class="fab fa-whatsapp text-xl"></i> الحصول على كود
         </a>
       </div>
       <button onclick="closePremiumModal()" class="w-full mt-4 text-gray-400 hover:text-gray-600 text-sm">إغلاق</button>
     </div>
   </div>
 
-  <!-- شاشة تسجيل الدخول بالبريد -->
+  <!-- شاشة تسجيل الدخول -->
   <div id="authScreen" class="fixed inset-0 z-[90] bg-gradient-to-br from-indigo-800 via-blue-800 to-blue-900 hidden flex-col justify-center items-center p-6">
     <div class="bg-white/10 backdrop-blur-xl p-8 rounded-3xl shadow-2xl w-full max-w-sm border border-white/20">
       <button onclick="closeAuthScreen()" class="text-white mb-4 hover:bg-white/10 p-2 rounded-full"><i class="fas fa-arrow-right text-lg"></i></button>
       <div class="text-center text-white mb-8">
         <img src="https://img.icons8.com/3d-fluency/96/graduation-cap.png" class="w-20 h-20 mx-auto mb-3 drop-shadow-lg">
         <h2 id="authTitle" class="text-2xl font-extrabold">تسجيل الدخول</h2>
-        <p class="text-blue-200 text-sm mt-1">للوصول للمحتوى المدفوع، أدخل بريدك وكلمة المرور</p>
       </div>
-      
       <div id="authError" class="hidden bg-red-500/20 border border-red-400 text-red-200 text-sm p-3 rounded-lg mb-4 text-center"></div>
-
       <input id="authEmail" type="email" placeholder="البريد الإلكتروني" class="w-full p-3 mb-4 bg-white/10 text-white placeholder-blue-200 border border-white/20 rounded-xl focus:outline-none focus:border-white">
-      <input id="authPass" type="password" placeholder="كلمة المرور" class="w-full p-3 mb-6 bg-white/10 text-white placeholder-blue-200 border border-white/20 rounded-xl focus:outline-none focus:border-white">
-      
+      <div class="relative w-full mb-6">
+        <input id="authPass" type="password" placeholder="كلمة المرور" class="w-full p-3 bg-white/10 text-white placeholder-blue-200 border border-white/20 rounded-xl focus:outline-none focus:border-white">
+        <button type="button" onclick="togglePasswordVisibility()" class="absolute left-3 top-1/2 -translate-y-1/2 text-blue-200 hover:text-white">
+          <i id="passIcon" class="fas fa-eye"></i>
+        </button>
+      </div>
       <button id="authBtn" onclick="handleAuth()" class="w-full bg-white text-indigo-800 p-3 rounded-xl font-bold text-lg hover:bg-blue-100 transition">تسجيل الدخول</button>
-      
       <div class="text-center mt-6">
         <label class="text-blue-200 text-sm cursor-pointer">
           <input id="authModeLogin" type="checkbox" class="hidden" checked onchange="toggleAuthMode()">
           <span id="authToggleText" onclick="document.getElementById('authModeLogin').click(); this.previousElementSibling.checked = !this.previousElementSibling.checked; toggleAuthMode();">ليس لديك حساب؟ إنشاء حساب</span>
         </label>
-      </div>
-
-      <div class="border-t border-white/20 mt-6 pt-6 text-center">
-        <p class="text-blue-200 text-sm mb-3">ليس لديك بريد إلكتروني أو تريد شراء كود؟</p>
-        <a href="https://wa.me/963993865879" target="_blank" class="inline-flex items-center gap-2 bg-green-500 text-white px-4 py-2 rounded-xl font-bold text-sm">
-          <i class="fab fa-whatsapp text-lg"></i> تواصل معنا عبر واتساب
-        </a>
       </div>
     </div>
   </div>
@@ -663,15 +769,24 @@
   </div>
 
   <div id="appFrame" class="w-full max-w-2xl relative pb-24 min-h-screen overflow-hidden">
-    <div class="absolute top-4 right-4 z-30"><button onclick="toggleMenu()" class="ctrl-btn bg-white/20 backdrop-blur-md text-white"><i class="fas fa-bars text-lg"></i></button></div>
-    <div class="absolute top-4 left-4 z-30"><button onclick="toggleTheme()" class="ctrl-btn bg-white/20 backdrop-blur-md text-white"><i id="themeIcon" class="fas fa-moon text-lg"></i></button></div>
+    <div class="absolute top-4 right-4 z-30 flex gap-2">
+      <button onclick="toggleMenu()" class="ctrl-btn bg-white/20 backdrop-blur-md text-white"><i class="fas fa-bars text-lg"></i></button>
+    </div>
+    <div class="absolute top-4 left-4 z-30 flex gap-2">
+      <button onclick="openCartScreen()" class="ctrl-btn bg-white/20 backdrop-blur-md text-white relative">
+        <i class="fas fa-shopping-cart text-lg"></i>
+        <span id="cartBadge" class="hidden absolute -top-1 -right-1 bg-red-500 text-white text-[10px] rounded-full h-4 w-4 flex items-center justify-center">0</span>
+      </button>
+      <button onclick="toggleTheme()" class="ctrl-btn bg-white/20 backdrop-blur-md text-white"><i id="themeIcon" class="fas fa-moon text-lg"></i></button>
+    </div>
+
+    <button onclick="openPackagesScreen()" class="fixed bottom-24 right-4 z-40 bg-amber-500 text-white p-4 rounded-full shadow-xl active:scale-90 transition-transform">
+      <i class="fas fa-crown text-xl"></i>
+    </button>
 
     <div id="socialMenu" class="hidden absolute top-16 right-4 w-56 bg-indigo-900/40 dark:bg-slate-900/60 backdrop-blur-xl rounded-2xl shadow-2xl py-2 z-30 border border-white/20">
       <a href="https://wa.me/963993865879" target="_blank" class="flex items-center gap-3 px-4 py-3 text-white hover:bg-white/10"><i class="fab fa-whatsapp text-green-400 text-xl"></i> واتساب</a>
-      <a href="https://instagram.com/" target="_blank" class="flex items-center gap-3 px-4 py-3 text-white hover:bg-white/10"><i class="fab fa-instagram text-pink-400 text-xl"></i> انستغرام</a>
-      <a href="tel:" class="flex items-center gap-3 px-4 py-3 text-white hover:bg-white/10"><i class="fas fa-phone text-blue-300 text-xl"></i> اتصال</a>
-      <div class="border-t border-white/10 my-1"></div>
-      <a href="#" onclick="event.preventDefault(); requestBack(); setTimeout(()=>{ showPremiumModal(); }, 10);" class="flex items-center gap-3 px-4 py-3 text-white hover:bg-white/10"><i class="fas fa-crown text-amber-400 text-xl"></i> تفعيل اشتراك</a>
+      <a href="#" onclick="event.preventDefault(); requestBack(); setTimeout(()=>{ openPackagesScreen(); }, 10);" class="flex items-center gap-3 px-4 py-3 text-white hover:bg-white/10"><i class="fas fa-crown text-amber-400 text-xl"></i> الباقات</a>
       <button id="authBtnNav" onclick="openAuthScreen()" class="w-full flex items-center gap-3 px-4 py-3 text-white hover:bg-white/10"><i class="fas fa-right-to-bracket text-blue-300 text-xl"></i> تسجيل الدخول</button>
     </div>
 
@@ -680,6 +795,7 @@
       <div class="relative z-10 flex flex-col items-center text-center text-white pt-8">
         <img src="https://img.icons8.com/3d-fluency/96/graduation-cap.png" class="w-20 h-20 mb-3 drop-shadow-lg">
         <h1 class="text-3xl font-extrabold tracking-tight drop-shadow-md">منصة إنجاز الأكاديمية</h1>
+        <p class="text-amber-300 mt-1 font-bold text-sm">البكالوريا العلمي - المنهاج السوري</p>
         <p class="text-blue-200 mt-1 font-semibold text-lg">المساعد الأكاديمي التعليمي</p>
       </div>
     </header>
@@ -708,7 +824,6 @@
             <button id="searchClearBtn" onclick="clearSearch()" class="hidden text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"><i class="fas fa-times-circle"></i></button>
           </div>
         </div>
-        
         <div id="gridView">
           <h2 class="text-md font-bold text-gray-600 dark:text-gray-300 mb-3 flex items-center gap-2"><i class="fas fa-th-large text-indigo-500"></i> اختر المادة</h2>
           <div id="lessonsGrid" class="grid grid-cols-2 gap-4"></div>
@@ -716,7 +831,6 @@
             <div class="rounded-2xl overflow-hidden shadow-lg bg-gray-200 dark:bg-slate-800 w-full" style="aspect-ratio: 16/9;"><img id="sliderImg" src="" class="w-full h-full object-cover transition-all duration-500"></div>
           </div>
         </div>
-
         <div id="listView" style="display:none;">
           <div class="flex items-center gap-3 mb-4"><button onclick="showGridView()" class="bg-white/70 dark:bg-slate-800 p-2 rounded-xl shadow-sm border text-gray-600"><i class="fas fa-arrow-right"></i></button><h2 id="listTitle" class="text-lg font-bold text-gray-800 dark:text-gray-200">المادة</h2></div>
           <div id="lessonsList"></div>
@@ -728,12 +842,35 @@
     </div>
   </div>
 
+  <!-- شاشة الباقات -->
+  <div id="packagesScreen" class="fixed inset-0 bg-slate-50 dark:bg-slate-900 z-[50] flex-col w-full pb-24" style="display:none;">
+    <div class="relative bg-gradient-to-br from-amber-500 to-orange-600 dark:from-slate-900 dark:to-slate-800 pt-10 pb-12 px-5 rounded-b-[2rem] shadow-xl overflow-hidden w-full">
+      <button onclick="closePackagesScreen()" class="absolute top-4 right-4 bg-white/20 p-2 rounded-full"><i class="fas fa-arrow-right text-lg text-white"></i></button>
+      <div class="relative z-10 flex flex-col items-center text-center text-white">
+        <h1 class="text-2xl font-extrabold">الاشتراكات والباقات</h1>
+        <p class="text-amber-100 mt-1 font-semibold text-sm">اختر الباقة المناسبة لك</p>
+      </div>
+    </div>
+    <div id="packagesContainer" class="p-4 flex-1 overflow-y-auto w-full"></div>
+  </div>
+
+  <!-- شاشة السلة -->
+  <div id="cartScreen" class="fixed inset-0 bg-slate-50 dark:bg-slate-900 z-[50] flex-col w-full pb-24" style="display:none;">
+    <div class="relative bg-gradient-to-br from-indigo-800 via-blue-800 to-blue-900 dark:from-slate-900 dark:to-slate-800 pt-10 pb-12 px-5 rounded-b-[2rem] shadow-xl overflow-hidden w-full">
+      <button onclick="closeCartScreen()" class="absolute top-4 right-4 bg-white/20 p-2 rounded-full"><i class="fas fa-arrow-right text-lg text-white"></i></button>
+      <div class="relative z-10 flex flex-col items-center text-center text-white">
+        <h1 class="text-2xl font-extrabold">سلة المشتريات</h1>
+      </div>
+    </div>
+    <div id="cartList" class="p-4 flex-1 overflow-y-auto w-full"></div>
+  </div>
+
+  <!-- شاشة الملفات -->
   <div id="lessonFilesScreen" class="fixed inset-0 bg-slate-50 dark:bg-slate-900 z-[50] flex-col w-full pb-24" style="display:none;">
     <div class="relative bg-gradient-to-br from-indigo-800 via-blue-800 to-blue-900 dark:from-slate-900 dark:to-slate-800 pt-10 pb-12 px-5 rounded-b-[2rem] shadow-xl overflow-hidden w-full">
       <div id="headerBgLayerFiles" class="absolute inset-0 bg-cover bg-center opacity-20 mix-blend-overlay"></div>
       <div class="relative z-10 flex flex-col items-center text-center text-white">
         <button onclick="closeLessonFiles()" class="absolute top-4 right-4 bg-white/20 p-2 rounded-full"><i class="fas fa-arrow-right text-lg"></i></button>
-        <img src="https://img.icons8.com/3d-fluency/96/graduation-cap.png" class="w-16 h-16 mb-2">
         <h1 class="text-2xl font-extrabold">ملحقات الدرس</h1>
         <p id="filesLessonTitle" class="text-blue-200 mt-1 font-semibold text-md truncate w-full px-4">جاري التحميل...</p>
       </div>
@@ -741,6 +878,7 @@
     <div class="p-4 flex-1 overflow-y-auto w-full" id="filesContainer"></div>
   </div>
 
+  <!-- شاشة العرض -->
   <div id="viewerScreen" class="fixed inset-0 bg-white dark:bg-slate-900 z-[60] flex-col relative w-full" style="display:none;">
     <div class="watermark">منصة إنجاز الأكاديمية</div>
     <div class="sticky top-0 z-20 p-3 bg-white/95 dark:bg-slate-800/95 backdrop-blur-sm shadow-sm border-b border-gray-100 dark:border-slate-700 w-full">
