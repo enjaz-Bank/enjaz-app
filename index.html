@@ -2,7 +2,7 @@
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
 <title>منصة إنجاز الأكاديمية</title>
 
 <meta http-equiv="Content-Security-Policy" content="default-src * 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https:; frame-src * 'self' https: data: blob:; img-src * 'self' data: blob: https:; media-src * 'self' data: blob: https:">
@@ -10,15 +10,6 @@
 <script src="https://cdn.tailwindcss.com"></script>
 <script> tailwind.config = { darkMode: 'class' } </script>
 
-<script>
-  window.MathJax = {
-    tex: { inlineMath: [['$', '$'], ['\\(', '\\)']], displayMath: [['$$', '$$'], ['\\[', '\\]']], processEscapes: true, processEnvironments: true, packages: { '[+]': ['ams', 'boldsymbol', 'color', 'textmacros', 'noerrors', 'noundefined'] } },
-    options: { skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'], ignoreHtmlClass: 'tex2jax_ignore', processHtmlClass: 'tex2jax_process' },
-    svg: { fontCache: 'local', scale: 0.92 },
-    startup: { typeset: false }
-  };
-</script>
-<script async id="MathJax-script" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
@@ -53,8 +44,12 @@
   let sliderImages = [];
   let sliderIndex = 0;
   let sliderInterval = null;
+  let splashHidden = false;
+  let searchTimeout;
+  let audioCtx = null;
+  let stateRestored = false;
   
-  let appCurrency = 'ل.س'; // افتراضي
+  let appCurrency = 'ل.س';
 
   const CACHE_KEY_LESSONS = 'enjaz_lessons_cache_v6';
   const CACHE_KEY_CART = 'enjaz_cart_cache';
@@ -73,7 +68,15 @@
   let navLevel = 0;
   const appStack = [];
 
-  function pushScreen(name, data) { navLevel++; appStack.push({ name, data: data || null }); try { history.pushState({ level: navLevel }, ''); } catch (e) {} }
+  function pushScreen(name, data) { 
+    navLevel++; 
+    appStack.push({ name, data: data || null }); 
+    try { 
+      sessionStorage.setItem('enjaz_app_stack', JSON.stringify(appStack));
+      sessionStorage.setItem('enjaz_active_tab', document.querySelector('.app-tab:not(.hidden)')?.id || 'lessonsContainer');
+      history.pushState({ level: navLevel }, ''); 
+    } catch (e) {} 
+  }
   function requestBack() { if (navLevel > 0) { try { history.back(); } catch (e) {} } }
 
   function applyCloseForState(state) {
@@ -114,6 +117,7 @@
         break;
       case 'socialMenu':
         document.getElementById('socialMenu').classList.add('hidden');
+        document.getElementById('contactSubMenu').classList.add('hidden');
         break;
       case 'authScreen':
         document.getElementById('authScreen').classList.add('hidden');
@@ -124,8 +128,70 @@
 
   window.addEventListener('popstate', function (e) {
     const target = (e.state && typeof e.state.level === 'number') ? e.state.level : 0;
-    while (navLevel > target) { const st = appStack.pop(); navLevel--; applyCloseForState(st); }
+    while (navLevel > target) { 
+      const st = appStack.pop(); 
+      navLevel--; 
+      applyCloseForState(st); 
+      try { sessionStorage.setItem('enjaz_app_stack', JSON.stringify(appStack)); } catch(e) {}
+    }
   });
+
+  document.addEventListener('click', function(e) {
+    const menu = document.getElementById('socialMenu');
+    const btn = document.getElementById('menuBtn');
+    if (menu && !menu.contains(e.target) && btn && !btn.contains(e.target) && !menu.classList.contains('hidden')) {
+      requestBack();
+    }
+  });
+
+  window.playClickSound = function() {
+    if (sessionStorage.getItem('enjaz_muted') === 'true') return;
+    try {
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      const filter = audioCtx.createBiquadFilter();
+      
+      osc.connect(filter);
+      filter.connect(gain);
+      gain.connect(audioCtx.destination);
+      
+      filter.type = 'lowpass';
+      filter.frequency.value = 1000;
+      
+      osc.frequency.setValueAtTime(300, audioCtx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(150, audioCtx.currentTime + 0.05);
+      osc.type = 'sine';
+      
+      gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.1);
+      
+      osc.start(audioCtx.currentTime);
+      osc.stop(audioCtx.currentTime + 0.1);
+    } catch(e) {}
+  };
+
+  window.toggleSound = function() {
+    const isMuted = sessionStorage.getItem('enjaz_muted') === 'true';
+    const newMuted = !isMuted;
+    sessionStorage.setItem('enjaz_muted', newMuted);
+    
+    const icon = document.getElementById('soundIcon');
+    const text = document.getElementById('soundText');
+    if (newMuted) {
+      icon.className = 'fas fa-volume-xmark text-red-500 text-xl';
+      text.innerText = 'تشغيل الصوت';
+    } else {
+      playClickSound();
+      icon.className = 'fas fa-volume-high text-amber-500 text-xl';
+      text.innerText = 'كتم الصوت';
+    }
+  };
+
+  window.toggleContactSub = function() {
+    playClickSound();
+    document.getElementById('contactSubMenu').classList.toggle('hidden');
+  };
 
   window.showAppTab = function(tabName) {
     document.querySelectorAll('.app-tab').forEach(t => t.classList.add('hidden'));
@@ -140,6 +206,7 @@
     if (tabName === 'lessonsContainer') { document.getElementById('listView').style.display = 'none'; document.getElementById('gridView').style.display = 'block'; currentView = 'grid'; }
     if (tabName === 'savedContainer') renderBookmarks();
     if (tabName === 'libraryContainer') loadLibrary();
+    try { sessionStorage.setItem('enjaz_active_tab', tabName); } catch(e) {}
   };
 
   window.toggleTheme = function() {
@@ -148,27 +215,39 @@
     else { html.classList.add('dark'); localStorage.setItem('enjaz_theme', 'dark'); icon.className = 'fas fa-sun text-lg'; }
   };
 
-  window.toggleMenu = function() { const menu = document.getElementById('socialMenu'); if (menu.classList.contains('hidden')) { menu.classList.remove('hidden'); pushScreen('socialMenu'); } else { requestBack(); } };
+  window.toggleMenu = function(e) { 
+    if(e) e.stopPropagation();
+    playClickSound(); 
+    const menu = document.getElementById('socialMenu'); 
+    if (menu.classList.contains('hidden')) { 
+      menu.classList.remove('hidden'); 
+      pushScreen('socialMenu'); 
+    } else { 
+      requestBack(); 
+    } 
+  };
   
-  window.openPackagesScreen = function() { document.getElementById('packagesScreen').style.display = 'flex'; document.getElementById('appFrame').style.display = 'none'; pushScreen('packagesScreen'); loadPackages(); }
+  window.openPackagesScreen = function(skipPush = false) { playClickSound(); document.getElementById('packagesScreen').style.display = 'flex'; document.getElementById('appFrame').style.display = 'none'; if(!skipPush) pushScreen('packagesScreen'); loadPackages(); }
   window.closePackagesScreen = function() { requestBack(); }
 
-  window.openCartScreen = function() { document.getElementById('cartScreen').style.display = 'flex'; document.getElementById('appFrame').style.display = 'none'; pushScreen('cartScreen'); renderCart(); }
+  window.openCartScreen = function(skipPush = false) { playClickSound(); document.getElementById('cartScreen').style.display = 'flex'; document.getElementById('appFrame').style.display = 'none'; if(!skipPush) pushScreen('cartScreen'); renderCart(); }
   window.closeCartScreen = function() { requestBack(); }
 
   window.showPremiumModal = function() { 
+    playClickSound();
     if (!currentUser) { openAuthScreen(); return; } 
     document.getElementById('premiumModal').classList.remove('hidden'); document.getElementById('premiumModal').classList.add('flex'); pushScreen('premiumModal'); 
   };
   window.closePremiumModal = function() { requestBack(); };
 
   window.openSingleBuyModal = function() { 
+    playClickSound();
     if (!currentUser) { openAuthScreen(); return; } 
     document.getElementById('singleBuyModal').classList.remove('hidden'); document.getElementById('singleBuyModal').classList.add('flex'); pushScreen('singleBuyModal'); 
   }
   window.closeSingleBuyModal = function() { requestBack(); }
 
-  window.openAuthScreen = function() { document.getElementById('authScreen').classList.remove('hidden'); document.getElementById('authScreen').classList.add('flex'); document.getElementById('authError').classList.add('hidden'); pushScreen('authScreen'); }
+  window.openAuthScreen = function(skipPush = false) { playClickSound(); document.getElementById('authScreen').classList.remove('hidden'); document.getElementById('authScreen').classList.add('flex'); document.getElementById('authError').classList.add('hidden'); if(!skipPush) pushScreen('authScreen'); }
   window.closeAuthScreen = function() { requestBack(); }
 
   window.togglePasswordVisibility = function() {
@@ -217,6 +296,7 @@
   }
 
   window.addToCart = function(fileId, fileName, filePrice) {
+    playClickSound();
     if(!cart.some(f => f.id === fileId)) cart.push({ id: fileId, name: fileName, price: filePrice || 0 });
     saveCart(); updateCartBadge(); closeSingleBuyModal();
     alert("تمت الإضافة إلى السلة 🛒");
@@ -253,7 +333,7 @@
         <span class="text-xl font-extrabold text-indigo-600">${total} ${appCurrency}</span>
       </div>
       <button onclick="showPremiumModal()" class="w-full bg-indigo-600 text-white p-3 rounded-xl font-bold mb-3">شراء المحتويات (إدخال كود)</button>
-      <a href="https://wa.me/963993865879?text=أرغب%20بشراء%20الدروس%20التالية:%20${cart.map(f => f.name).join(', ')}%20السعر%20الإجمالي:%20${total}%20${encodeURIComponent(appCurrency)}" target="_blank" class="w-full bg-green-500 text-white p-3 rounded-xl font-bold flex items-center justify-center gap-2">
+      <a href="https://chat.whatsapp.com/HI042GjVcQRBh7YBDZrb5m" target="_blank" class="w-full bg-green-500 text-white p-3 rounded-xl font-bold flex items-center justify-center gap-2">
         <i class="fab fa-whatsapp text-xl"></i> إرسال القائمة للشراء عبر واتساب
       </a>
     </div>`;
@@ -265,7 +345,6 @@
     saveCart(); updateCartBadge(); renderCart();
   }
 
-  // دالة تفعيل الكود (محدثة لدعم باقات المواد)
   window.redeemCode = async function() {
     const codeInput = document.getElementById('redeemCodeInput').value.trim();
     const errBox = document.getElementById('redeemError');
@@ -294,35 +373,40 @@
       currentUserData.purchasedFiles = currentUserData.purchasedFiles || [];
 
       if(codeData.type === 'package') {
-        if (codeData.targetId === 'pkg1') { // اشتراك كامل
+        if (codeData.targetId === 'pkg1') {
           userUpdate.activePackages = arrayUnion('pkg1');
           if(!currentUserData.activePackages.includes('pkg1')) currentUserData.activePackages.push('pkg1');
-        } else { // باقة مواد
+        } else {
           const pkgSnap = await getDoc(doc(db, "settings", "packages"));
           if (pkgSnap.exists()) {
             const pkgData = pkgSnap.data()[codeData.targetId];
             if (pkgData && pkgData.subjects) {
-              userUpdate.activePackageSubjects = arrayUnion(...pkgData.subjects);
-              pkgData.subjects.forEach(sub => {
+              // Fix for arrayUnion limit > 10
+              const subjects = pkgData.subjects;
+              for (let i = 0; i < subjects.length; i += 10) {
+                const chunk = subjects.slice(i, i + 10);
+                await updateDoc(doc(db, "users", currentUser.uid), { activePackageSubjects: arrayUnion(...chunk) });
+              }
+              subjects.forEach(sub => {
                 if(!currentUserData.activePackageSubjects.includes(sub)) currentUserData.activePackageSubjects.push(sub);
               });
             }
           }
         }
-        cart = []; 
-        saveCart(); updateCartBadge();
+        cart = []; saveCart(); updateCartBadge();
       } else if(codeData.type === 'cart') {
         let cartFileIds = cart.map(f => f.id);
         if(cartFileIds.length > 0) {
-          userUpdate.purchasedFiles = arrayUnion(...cartFileIds);
+          // Fix for arrayUnion limit > 10
+          for (let i = 0; i < cartFileIds.length; i += 10) {
+            const chunk = cartFileIds.slice(i, i + 10);
+            await updateDoc(doc(db, "users", currentUser.uid), { purchasedFiles: arrayUnion(...chunk) });
+          }
           cartFileIds.forEach(id => { if(!currentUserData.purchasedFiles.includes(id)) currentUserData.purchasedFiles.push(id); });
         }
-        cart = []; 
-        saveCart(); updateCartBadge();
+        cart = []; saveCart(); updateCartBadge();
       }
 
-      await updateDoc(doc(db, "users", currentUser.uid), userUpdate);
-      
       errBox.classList.add('hidden');
       successBox.classList.remove('hidden');
       successBox.innerText = "تم تفعيل الكود بنجاح! 🎉";
@@ -340,7 +424,6 @@
 
   window.handleLogout = function() { signOut(auth).then(() => { requestBack(); }); }
 
-  // =========== مكتبتي ===========
   window.loadLibrary = async function() {
     const c = document.getElementById('libraryList');
     if (!currentUser) {
@@ -369,13 +452,21 @@
 
     if (purchasedFiles.length > 0) {
       html += `<h3 class="font-bold text-md text-gray-700 dark:text-gray-200 mb-3">الدروس المشتراة فردياً:</h3><div class="space-y-3">`;
-      const q = query(collection(db, "files"), where(documentId(), "in", purchasedFiles));
-      const snap = await getDocs(q);
-      snap.forEach(d => {
-        const f = d.data();
+      
+      // Fix for Firestore "in" query limit (>10)
+      const chunkSize = 10;
+      let allFiles = [];
+      for (let i = 0; i < purchasedFiles.length; i += chunkSize) {
+        const chunk = purchasedFiles.slice(i, i + chunkSize);
+        const q = query(collection(db, "files"), where(documentId(), "in", chunk));
+        const snap = await getDocs(q);
+        snap.forEach(d => allFiles.push({ id: d.id, ...d.data() }));
+      }
+      
+      allFiles.forEach(f => {
         html += `<div class="bg-white dark:bg-slate-800 p-4 rounded-2xl shadow-sm border flex justify-between items-center">
           <h4 class="font-bold text-sm text-gray-800 dark:text-gray-200">${f.fileName}</h4>
-          <button onclick="openLibraryFile('${d.id}')" class="bg-blue-500 text-white text-xs px-4 py-2 rounded-lg font-bold">فتح الدرس</button>
+          <button onclick="openLibraryFile('${f.id}')" class="bg-blue-500 text-white text-xs px-4 py-2 rounded-lg font-bold">فتح الدرس</button>
         </div>`;
       });
       html += `</div>`;
@@ -387,6 +478,7 @@
   }
 
   window.openLibraryFile = async function(fileId) {
+    playClickSound();
     const docSnap = await getDoc(doc(db, "files", fileId));
     if (!docSnap.exists()) { alert("الدرس غير موجود"); return; }
     
@@ -415,7 +507,6 @@
     }
   }
 
-  // =========== الباقات ===========
   window.loadPackages = async function() {
     const c = document.getElementById('packagesContainer');
     c.innerHTML = `<div class="text-center mt-10"><div class="w-8 h-8 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin mx-auto"></div></div>`;
@@ -445,8 +536,8 @@
         html += `</div>
         <div class="mt-8 bg-gray-50 dark:bg-slate-800 p-4 rounded-xl border text-center">
           <p class="text-gray-500 text-sm mb-3">ليس لديك كود؟ تواصل معنا للحصول عليه:</p>
-          <a href="https://wa.me/963993865879" target="_blank" class="inline-flex items-center gap-2 bg-green-500 text-white px-4 py-2 rounded-xl font-bold text-sm">
-            <i class="fab fa-whatsapp text-lg"></i> تواصل عبر واتساب
+          <a href="https://chat.whatsapp.com/HI042GjVcQRBh7YBDZrb5m" target="_blank" class="inline-flex items-center gap-2 bg-green-500 text-white px-4 py-2 rounded-xl font-bold text-sm">
+            <i class="fab fa-whatsapp text-lg"></i> الانضمام لمجموعة الواتساب
           </a>
         </div>`;
         c.innerHTML = html;
@@ -456,7 +547,6 @@
     } catch(e) { c.innerHTML = "<p class='text-center text-red-500 mt-10'>خطأ في تحميل الباقات.</p>"; }
   }
 
-  // =========== المفضلة ===========
   window.loadBookmarks = function() {
     if (activeListeners.bookmarks) activeListeners.bookmarks();
     activeListeners.bookmarks = onSnapshot(collection(db, "users", currentUser.uid, "bookmarks"), (snap) => {
@@ -468,26 +558,34 @@
 
   window.toggleBookmark = async function(id, event) {
     event.stopPropagation();
+    playClickSound();
     if (!currentUser) { openAuthScreen(); return; }
     const ref = doc(db, "users", currentUser.uid, "bookmarks", id);
     if (bookmarks.includes(id)) { await deleteDoc(ref); } 
     else { await setDoc(ref, { createdAt: new Date() }); }
   }
 
-  // =========== الكاش والإعدادات ===========
   function saveLessonsCache() { try { localStorage.setItem(CACHE_KEY_LESSONS, JSON.stringify(lessonsData)); } catch (e) {} }
   function loadLessonsCache() { try { const raw = localStorage.getItem(CACHE_KEY_LESSONS); if (!raw) return false; const arr = JSON.parse(raw); if (!Array.isArray(arr)) return false; lessonsData = arr; updateStats(); renderGrid(); return true; } catch (e) { return false; } }
 
   function applyHeaderBg(bgUrl, opacity) { 
     const layer = document.getElementById('headerBgLayer'); 
-    if (layer) {
-      layer.style.backgroundImage = `url(${bgUrl})`;
-      layer.style.opacity = (opacity || 30) / 100;
+    if (layer) { 
+      layer.style.backgroundImage = `url(${bgUrl})`; 
+      layer.style.opacity = 1; 
     }
-    const filesHeader = document.getElementById('headerBgLayerFiles'); 
-    if (filesHeader) {
-      filesHeader.style.backgroundImage = `url(${bgUrl})`;
-      filesHeader.style.opacity = ((opacity || 30) - 10) / 100; // ملفات الهيدر أقل شفافية
+    const overlay = document.getElementById('headerOverlay'); 
+    if (overlay) { 
+      overlay.style.opacity = (opacity || 30) / 100; 
+    }
+    const filesLayer = document.getElementById('headerBgLayerFiles'); 
+    if (filesLayer) {
+      filesLayer.style.backgroundImage = `url(${bgUrl})`;
+      filesLayer.style.opacity = 1;
+    }
+    const filesOverlay = document.getElementById('headerBgLayerFilesOverlay'); 
+    if (filesOverlay) { 
+      filesOverlay.style.opacity = ((opacity || 30) - 10) / 100;
     }
   }
 
@@ -508,12 +606,34 @@
   function applyMarquee(text, speed, color, bgColor) {
     const bar = document.getElementById('marqueeBar');
     const txtEl = document.getElementById('marqueeText');
-    if(text && text.trim() !== "") {
-      txtEl.innerText = text; bar.classList.remove('hidden');
-      if(speed) txtEl.style.animationDuration = speed + 's';
-      if(color) txtEl.style.color = color;
-      if(bgColor) bar.style.backgroundColor = bgColor + '26'; // Adding alpha to hex
-    } else { bar.classList.add('hidden'); }
+    const finalText = (text && text.trim() !== "") ? text : "🌟 أنت أقوى من امتحان البكالوريا.. ثق بذكائك وقدرتك على النجاح. كل دقيقة تذاكرها اليوم هي درجة تضيفها لطموحك غداً!";
+    
+    txtEl.innerText = finalText; 
+    bar.classList.remove('hidden');
+    
+    const delay = 0.3; 
+    const finalSpeed = Number(speed) || 10;
+    const totalDuration = finalSpeed + delay; 
+    const endPercentage = (finalSpeed / totalDuration) * 100;
+    
+    const styleId = 'marquee-dynamic-style';
+    let dynStyle = document.getElementById(styleId);
+    if (!dynStyle) {
+      dynStyle = document.createElement('style');
+      dynStyle.id = styleId;
+      document.head.appendChild(dynStyle);
+    }
+    dynStyle.innerHTML = `
+      @keyframes marquee {
+        0% { right: 100%; }
+        ${endPercentage}% { right: -100%; }
+        100% { right: -100%; }
+      }
+    `;
+    txtEl.style.animationDuration = totalDuration + 's';
+    
+    if(color) txtEl.style.color = color; 
+    if(bgColor) bar.style.backgroundColor = bgColor; 
   }
 
   window.loadSlider = function() {
@@ -536,16 +656,32 @@
     });
   };
 
+  function hideSplash() {
+    if (splashHidden) return;
+    splashHidden = true;
+    const ss = document.getElementById('splashScreen');
+    if (ss) {
+      ss.classList.add('opacity-0');
+      setTimeout(() => { if (ss) ss.style.display = 'none'; }, 500);
+    }
+  }
+
   window.loadAppLessons = function() {
     const hasCache = loadLessonsCache();
-    if (!hasCache) renderSkeletons();
+    if (hasCache) { hideSplash(); restoreState(); } else { renderSkeletons(); }
     if (activeListeners.lessons) activeListeners.lessons();
     activeListeners.lessons = onSnapshot(collection(db, "lessons"), (snapshot) => {
         lessonsData = [];
         snapshot.forEach((docSnap) => lessonsData.push({ id: docSnap.id, ...docSnap.data() }));
         lessonsData.sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
         saveLessonsCache(); updateStats(); renderGrid();
-      }, (err) => { console.warn('Error:', err); if (!hasCache) renderSkeletons(); }
+        hideSplash(); 
+        if (!stateRestored) restoreState(); 
+      }, (err) => { 
+        console.warn('Error:', err); 
+        hideSplash(); 
+        if (!hasCache) renderSkeletons(); 
+      }
     );
   };
 
@@ -565,7 +701,7 @@
     let finalHTML = "";
     fixedSubjects.forEach(sub => {
       const count = lessonsData.filter(l => l.subject === sub.name).length;
-      finalHTML += `<div onclick="openSubject('${sub.name}')" class="bg-gradient-to-br ${sub.color} p-4 rounded-3xl shadow-lg cursor-pointer active:scale-95 transition-transform duration-150 h-40 flex flex-col justify-between text-white relative overflow-hidden"><div class="absolute top-0 left-0 w-24 h-24 bg-white/10 rounded-full -mt-10 -ml-10"></div><div class="flex justify-between items-start relative z-10"><i class="fas ${sub.icon} text-3xl opacity-90"></i><span class="bg-white/25 backdrop-blur-sm px-2 py-1 rounded-full text-xs font-bold">${count} درس</span></div><h3 class="text-lg font-extrabold leading-tight relative z-10">${sub.name}</h3></div>`;
+      finalHTML += `<div onclick="openSubject('${sub.name}')" class="card-hover bg-gradient-to-br ${sub.color} p-4 rounded-3xl shadow-lg cursor-pointer active:scale-95 transition-transform duration-150 h-40 flex flex-col justify-between text-white relative overflow-hidden"><div class="absolute top-0 left-0 w-24 h-24 bg-white/10 rounded-full -mt-10 -ml-10"></div><div class="flex justify-between items-start relative z-10"><i class="fas ${sub.icon} text-3xl opacity-90"></i><span class="bg-white/25 backdrop-blur-sm px-2 py-1 rounded-full text-xs font-bold">${count} درس</span></div><h3 class="text-lg font-extrabold leading-tight relative z-10">${sub.name}</h3></div>`;
     });
     document.getElementById('lessonsGrid').innerHTML = finalHTML;
   };
@@ -573,10 +709,11 @@
   function renderLessonCard(lesson) {
     let isBookmarked = bookmarks.includes(lesson.id);
     let starClass = isBookmarked ? 'fa-solid text-amber-400' : 'fa-regular text-gray-300 dark:text-gray-600';
-    return `<div class="bg-white dark:bg-slate-800 p-4 rounded-2xl shadow-sm border border-gray-100 dark:border-slate-700 flex justify-between items-center cursor-pointer mb-3" onclick="openLesson('${lesson.id}')"><div class="flex items-center gap-4"><div class="w-12 h-12 rounded-xl bg-indigo-50 dark:bg-indigo-900/30 text-indigo-500 flex items-center justify-center text-xl"><i class="fas fa-book"></i></div><h4 class="font-bold text-md text-gray-800 dark:text-gray-200">${lesson.title}</h4></div><div class="flex items-center gap-2"><button onclick="toggleBookmark('${lesson.id}', event)" class="text-2xl w-8 h-8 flex items-center justify-center"><i class="fa-star ${starClass}"></i></button><span class="text-indigo-600 dark:text-indigo-400 text-xl bg-indigo-50 dark:bg-indigo-900/30 w-10 h-10 rounded-full flex items-center justify-center"><i class="fas fa-chevron-left text-sm"></i></span></div></div>`;
+    return `<div class="card-hover bg-white dark:bg-slate-800 p-4 rounded-2xl shadow-sm border border-gray-100 dark:border-slate-700 flex justify-between items-center cursor-pointer mb-3" onclick="openLesson('${lesson.id}')"><div class="flex items-center gap-4"><div class="w-12 h-12 rounded-xl bg-indigo-50 dark:bg-indigo-900/30 text-indigo-500 flex items-center justify-center text-xl"><i class="fas fa-book"></i></div><h4 class="font-bold text-md text-gray-800 dark:text-gray-200">${lesson.title}</h4></div><div class="flex items-center gap-2"><button onclick="toggleBookmark('${lesson.id}', event)" class="text-2xl w-8 h-8 flex items-center justify-center"><i class="fa-star ${starClass}"></i></button><span class="text-indigo-600 dark:text-indigo-400 text-xl bg-indigo-50 dark:bg-indigo-900/30 w-10 h-10 rounded-full flex items-center justify-center"><i class="fas fa-chevron-left text-sm"></i></span></div></div>`;
   }
 
-  window.openSubject = function(subjectName) {
+  window.openSubject = function(subjectName, skipPush = false) {
+    playClickSound();
     document.getElementById('listTitle').innerText = subjectName;
     const container = document.getElementById('lessonsList');
     const filteredLessons = lessonsData.filter(l => l.subject === subjectName);
@@ -585,7 +722,7 @@
     document.getElementById('gridView').style.display = 'none';
     document.getElementById('listView').style.display = 'block';
     currentView = "list";
-    pushScreen('subjectList', { subject: subjectName });
+    if(!skipPush) pushScreen('subjectList', { subject: subjectName });
   };
 
   window.renderBookmarks = function() {
@@ -610,26 +747,40 @@
     const input = document.getElementById('searchInput');
     const clearBtn = document.getElementById('searchClearBtn');
     const query = input.value.toLowerCase();
-    if(query.length > 0) clearBtn.classList.remove('hidden'); else clearBtn.classList.add('hidden');
-    if (query.trim() === "") { showGridView(); return; }
-    document.getElementById('listTitle').innerText = "نتائج البحث";
-    const container = document.getElementById('lessonsList');
-    const filteredLessons = lessonsData.filter(l => l.title.toLowerCase().includes(query));
-    if (filteredLessons.length === 0) container.innerHTML = "<p class='text-gray-400 text-center mt-10'>لا توجد نتائج.</p>";
-    else { let listHTML = ""; filteredLessons.forEach(lesson => listHTML += renderLessonCard(lesson)); container.innerHTML = listHTML; }
-    document.getElementById('gridView').style.display = 'none';
-    document.getElementById('listView').style.display = 'block';
-    currentView = "search";
+    
+    if(query.length > 0) clearBtn.classList.remove('hidden'); 
+    else clearBtn.classList.add('hidden');
+
+    clearTimeout(searchTimeout);
+    searchTimeout = setTimeout(() => {
+      if (query.trim() === "") { showGridView(); return; }
+      document.getElementById('listTitle').innerText = "نتائج البحث";
+      const container = document.getElementById('lessonsList');
+      const filteredLessons = lessonsData.filter(l => l.title.toLowerCase().includes(query));
+      
+      if (filteredLessons.length === 0) {
+        container.innerHTML = "<p class='text-gray-400 text-center mt-10'>لا توجد نتائج.</p>";
+      } else {
+        let listHTML = "";
+        filteredLessons.forEach(lesson => listHTML += renderLessonCard(lesson));
+        container.innerHTML = listHTML;
+      }
+      
+      document.getElementById('gridView').style.display = 'none';
+      document.getElementById('listView').style.display = 'block';
+      currentView = "search";
+    }, 300); 
   };
 
-  window.openLesson = function(id) {
+  window.openLesson = function(id, skipPush = false) {
+    playClickSound();
     const lesson = lessonsData.find(l => l.id === id);
     if (!lesson) return;
     document.getElementById('filesLessonTitle').innerText = lesson.title;
     document.getElementById('filesContainer').innerHTML = `<div class="text-center mt-10"><div class="w-8 h-8 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin mx-auto"></div></div>`;
     document.getElementById('lessonFilesScreen').style.display = 'flex';
     document.getElementById('appFrame').style.display = 'none';
-    pushScreen('lessonFiles', { lessonId: id });
+    if(!skipPush) pushScreen('lessonFiles', { lessonId: id });
     if (activeListeners.files) activeListeners.files();
     const q = query(collection(db, "files"), where("lessonId", "==", id));
     
@@ -637,36 +788,60 @@
       currentLessonFiles = [];
       snap.forEach(d => currentLessonFiles.push({ id: d.id, subject: lesson.subject, ...d.data() })); 
       
-      const order = ["الدروس الشاملة", "الدرس الشامل", "بطاقات المراجعة", "ملحق التمارين", "الادوات المساعدة", "الأدوات المساعدة"];
-      currentLessonFiles.sort((a, b) => {
-        let aIndex = order.findIndex(o => a.fileName.includes(o));
-        let bIndex = order.findIndex(o => b.fileName.includes(o));
-        if (aIndex === -1) aIndex = 99;
-        if (bIndex === -1) bIndex = 99;
-        return aIndex - bIndex;
-      });
+      currentLessonFiles.sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
 
       if (currentLessonFiles.length === 0) { document.getElementById('filesContainer').innerHTML = "<p class='text-gray-400 text-center mt-10'>لا توجد ملفات.</p>"; return; }
       let html = `<div class="space-y-4 mt-2">`;
       currentLessonFiles.forEach((f, index) => {
+        const isExtra = index >= 4;
+        const cardBg = isExtra ? 'from-red-50 to-rose-50 dark:from-red-900/20 dark:to-slate-800 border-red-200 dark:border-red-800' : 'from-blue-50 to-indigo-50 dark:from-slate-800 dark:to-slate-700 border-white dark:border-slate-600';
+        const iconHtml = isExtra ? `<i class="fas fa-star text-red-500"></i>` : `${index+1}`;
+        const extraBadge = isExtra ? '<span class="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded font-bold">إضافي</span>' : '';
+        
         let lockBadge = f.isPremium ? '<span class="text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded font-bold">مدفوع</span>' : '<span class="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded font-bold">مجاني</span>';
         let priceTag = (f.isPremium && f.price) ? `<span class="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded font-bold">${f.price} ${appCurrency}</span>` : '';
-        html += `<div class="bg-gradient-to-l from-blue-50 to-amber-50 dark:from-slate-800 dark:to-slate-700 p-4 rounded-2xl shadow-md border border-white dark:border-slate-600 flex items-center justify-between">
+        
+        const downloadBtnHtml = `<button onclick="handleDownload(${index})" class="bg-emerald-50 dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 p-2.5 rounded-lg border border-emerald-100 dark:border-slate-700 hover:bg-emerald-100 transition-colors"><i class="fas fa-download"></i></button>`;
+
+        html += `<div class="card-hover bg-gradient-to-l ${cardBg} p-4 rounded-2xl shadow-md border flex items-center justify-between">
           <div class="flex items-center gap-3 flex-1">
-            <span class="w-8 h-8 bg-indigo-100 dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 rounded-full flex items-center justify-center font-bold text-sm">${index+1}</span>
+            <span class="w-8 h-8 bg-indigo-100 dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 rounded-full flex items-center justify-center font-bold text-sm">${iconHtml}</span>
             <div class="flex flex-col">
               <h4 class="font-bold text-sm text-gray-800 dark:text-gray-200">${f.fileName}</h4>
-              <div class="flex gap-1 mt-1 items-center">${lockBadge} ${priceTag}</div>
+              <div class="flex gap-1 mt-1 items-center">${lockBadge} ${priceTag} ${extraBadge}</div>
             </div>
           </div>
           <div class="flex gap-2 items-center">
-            <button onclick="viewFileByIndex(${index})" class="bg-blue-500 text-white text-xs px-6 py-2 rounded-lg font-bold flex items-center gap-1 hover:bg-blue-600"><i class="fas fa-eye"></i> عرض</button>
+            <button onclick="playClickSound(); viewFileByIndex(${index})" class="bg-blue-500 text-white text-xs px-6 py-2 rounded-lg font-bold flex items-center gap-1 hover:bg-blue-600 transition-colors"><i class="fas fa-eye"></i> عرض</button>
+            ${downloadBtnHtml}
           </div>
         </div>`;
       });
       html += `</div>`;
       document.getElementById('filesContainer').innerHTML = html;
     });
+  };
+
+  window.handleDownload = function(index) {
+    playClickSound();
+    const f = currentLessonFiles[index];
+    if (!f) return;
+    if (f.isPremium) {
+      if (!currentUser) { openAuthScreen(); return; }
+      const hasFullPackage = currentUserData?.activePackages?.includes('pkg1');
+      const hasSubjectPackage = currentUserData?.activePackageSubjects?.includes(f.subject);
+      const hasFile = currentUserData?.purchasedFiles?.includes(f.id);
+      if (!hasFullPackage && !hasSubjectPackage && !hasFile) {
+        showPremiumModal();
+        return;
+      }
+    }
+    const a = document.createElement('a');
+    a.href = f.fileData;
+    a.download = f.fileName || 'درس';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   };
 
   window.closeLessonFiles = function() { requestBack(); };
@@ -776,6 +951,17 @@
     }
   };
 
+  window.openExamFile = function(url, title) {
+    playClickSound();
+    if (!url) { alert("الملف غير متوفر"); return; }
+    const win = window.open();
+    if (win) {
+      win.document.write(`<html><head><title>${title || 'ملف'}</title></head><body style="margin:0;"><iframe src="${url}" style="width:100%;height:100vh;border:none;"></iframe></body></html>`);
+    } else {
+      alert("الرجاء السماح بالنوافذ المنبثقة لعرض الملف.");
+    }
+  };
+
   window.loadAppExams = function() {
     if (activeListeners.exams) activeListeners.exams();
     activeListeners.exams = onSnapshot(collection(db, "exams"), (snap) => {
@@ -784,17 +970,26 @@
       snap.forEach(d => {
         const ex = d.data();
         const lockBadge = ex.isPremium ? '<span class="text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded font-bold">مدفوع</span>' : '<span class="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded font-bold">مجاني</span>';
-        c.innerHTML += `<div class="bg-white dark:bg-slate-800 p-4 rounded-2xl shadow-sm mb-3 flex justify-between items-center border"><div class="flex items-center gap-3"><div class="w-12 h-12 rounded-xl bg-indigo-50 flex items-center justify-center text-xl text-indigo-600"><i class="fas fa-folder-open"></i></div><div><h3 class="font-bold text-md text-gray-800 dark:text-gray-200">${ex.title}</h3><div class="mt-1">${lockBadge}</div></div></div><div class="flex gap-2"><button onclick="${ex.isPremium ? 'showPremiumModal()' : `openExamFile('${ex.fileUrl}')`}" class="bg-indigo-50 text-indigo-600 p-3 rounded-xl"><i class="fas fa-eye"></i></button><a href="${ex.fileUrl}" target="_blank" download="${ex.title}" onclick="${ex.isPremium ? 'event.preventDefault(); showPremiumModal();' : ''}" class="bg-emerald-50 text-emerald-600 p-3 rounded-xl"><i class="fas fa-download"></i></a></div></div>`;
+        const viewBtn = ex.isPremium ? 
+          `<button onclick="showPremiumModal()" class="bg-indigo-50 text-indigo-600 p-3 rounded-xl"><i class="fas fa-eye"></i></button>` : 
+          `<button onclick="openExamFile('${ex.fileUrl}', '${ex.title.replace(/'/g, "\\'")}')" class="bg-indigo-50 text-indigo-600 p-3 rounded-xl hover:bg-indigo-100 transition-colors"><i class="fas fa-eye"></i></button>`;
+        const dlBtn = ex.isPremium ? 
+          `<a href="#" onclick="event.preventDefault(); showPremiumModal();" class="bg-emerald-50 text-emerald-600 p-3 rounded-xl"><i class="fas fa-download"></i></a>` : 
+          `<a href="${ex.fileUrl}" target="_blank" download="${ex.title}" class="bg-emerald-50 text-emerald-600 p-3 rounded-xl hover:bg-emerald-100 transition-colors"><i class="fas fa-download"></i></a>`;
+          
+        c.innerHTML += `<div class="card-hover bg-white dark:bg-slate-800 p-4 rounded-2xl shadow-sm mb-3 flex justify-between items-center border"><div class="flex items-center gap-3"><div class="w-12 h-12 rounded-xl bg-indigo-50 flex items-center justify-center text-xl text-indigo-600"><i class="fas fa-folder-open"></i></div><div><h3 class="font-bold text-md text-gray-800 dark:text-gray-200">${ex.title}</h3><div class="mt-1">${lockBadge}</div></div></div><div class="flex gap-2">${viewBtn}${dlBtn}</div></div>`;
       });
     });
   };
 
   onAuthStateChanged(auth, async (user) => {
     const authBtn = document.getElementById('authBtnNav');
+    const authIcon = document.getElementById('authIcon');
+    const authText = document.getElementById('authText');
     if (user) {
       currentUser = user;
-      authBtn.classList.remove('hidden');
-      authBtn.innerText = "تسجيل الخروج";
+      authText.innerText = "تسجيل الخروج";
+      authIcon.className = "fas fa-right-from-bracket text-red-500 text-xl";
       authBtn.onclick = handleLogout;
       try {
         const userDoc = await getDoc(doc(db, "users", user.uid));
@@ -806,23 +1001,95 @@
       currentUser = null;
       currentUserData = null;
       bookmarks = [];
-      authBtn.classList.remove('hidden');
-      authBtn.innerText = "تسجيل الدخول";
+      authText.innerText = "تسجيل الدخول";
+      authIcon.className = "fas fa-right-to-bracket text-indigo-500 text-xl";
       authBtn.onclick = openAuthScreen;
     }
   });
 
+  function restoreState() {
+    if (stateRestored) return;
+    stateRestored = true;
+
+    let savedTab = 'lessonsContainer';
+    let savedStack = '[]';
+
+    try { savedTab = sessionStorage.getItem('enjaz_active_tab') || 'lessonsContainer'; } catch(e) {}
+    try { savedStack = sessionStorage.getItem('enjaz_app_stack') || '[]'; } catch(e) {}
+
+    document.querySelectorAll('.app-tab').forEach(t => t.classList.add('hidden'));
+    const tab = document.getElementById(savedTab);
+    if (tab) tab.classList.remove('hidden');
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('nav-active'));
+    const btn = document.getElementById('nav-'+savedTab);
+    if (btn) btn.classList.add('nav-active');
+
+    try {
+      const stack = JSON.parse(savedStack);
+      if (Array.isArray(stack) && stack.length > 0) {
+        appStack = stack;
+        navLevel = stack.length;
+        history.replaceState({ level: navLevel }, '');
+        
+        const last = stack[stack.length - 1];
+        if (last.name === 'lessonFiles' && last.data?.lessonId) {
+          openLesson(last.data.lessonId, true);
+        } else if (last.name === 'packagesScreen') {
+          openPackagesScreen(true);
+        } else if (last.name === 'cartScreen') {
+          openCartScreen(true);
+        } else if (last.name === 'subjectList' && last.data?.subject) {
+          openSubject(last.data.subject, true);
+        } else if (last.name === 'viewer' && stack.length >= 2) {
+          const prev = stack[stack.length - 2];
+          if (prev.name === 'lessonFiles' && prev.data?.lessonId) {
+            appStack.pop(); navLevel--;
+            openLesson(prev.data.lessonId, true);
+          }
+        }
+      }
+    } catch(e) {}
+  }
+
+  function restoreSoundState() {
+    const isMuted = sessionStorage.getItem('enjaz_muted') === 'true';
+    const icon = document.getElementById('soundIcon');
+    const text = document.getElementById('soundText');
+    if (isMuted) {
+      icon.className = 'fas fa-volume-xmark text-red-500 text-xl';
+      text.innerText = 'تشغيل الصوت';
+    }
+  }
+
   window.onload = function() {
     if (localStorage.getItem('enjaz_theme') === 'dark') { document.documentElement.classList.add('dark'); document.getElementById('themeIcon').className = 'fas fa-sun text-lg'; }
+    
     try { history.replaceState({ level: 0 }, ''); } catch (e) {}
+    
     loadCart();
-    window.loadAppLessons(); window.loadAppExams(); window.loadAppSettings(); window.loadSlider();
-    setTimeout(() => { document.getElementById('splashScreen').classList.add('opacity-0'); setTimeout(() => document.getElementById('splashScreen').style.display = 'none', 500); }, 1200);
+    restoreSoundState();
+    window.loadAppLessons(); 
+    window.loadAppExams(); 
+    window.loadAppSettings(); 
+    window.loadSlider();
+    
+    setTimeout(() => {
+      if(!stateRestored) restoreState();
+    }, 1500);
+    
+    setTimeout(hideSplash, 2500); 
   };
 </script>
 <style>
   * { -webkit-tap-highlight-color: transparent; }
-  body { font-family: 'Cairo', sans-serif; background-color: #eef2ff; background-image: radial-gradient(at 0% 0%, hsla(253, 100%, 93%, 0.4) 0px, transparent 50%), radial-gradient(at 98% 1%, hsla(215, 100%, 93%, 0.4) 0px, transparent 50%); min-height: 100vh; }
+  html, body { 
+    font-family: 'Cairo', sans-serif; 
+    background-color: #eef2ff; 
+    background-image: radial-gradient(at 0% 0%, hsla(253, 100%, 93%, 0.4) 0px, transparent 50%), radial-gradient(at 98% 1%, hsla(215, 100%, 93%, 0.4) 0px, transparent 50%); 
+    min-height: 100vh; 
+    overscroll-behavior: none; 
+    -webkit-overflow-scrolling: touch;
+  }
   .dark body { background-color: #0f172a; }
   ::-webkit-scrollbar { width: 0px; }
   .nav-btn, .nav-btn i, .nav-btn span { color: #000000; transition: color .3s ease, transform .3s ease; }
@@ -833,9 +1100,13 @@
   .watermark { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(-45deg); font-size: 3rem; font-weight: bold; color: rgba(0, 0, 0, 0.1); pointer-events: none; z-index: 10; white-space: nowrap; }
   .dark .watermark { color: rgba(255, 255, 255, 0.1); }
   .ctrl-btn { width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border-radius: 12px; }
-  .marquee-container { overflow: hidden; white-space: nowrap; }
-  .marquee-text { display: inline-block; padding-left: 100%; animation: marquee 15s linear infinite; }
-  @keyframes marquee { 0% { transform: translateX(-100%); } 100% { transform: translateX(0%); } }
+  
+  .marquee-container { overflow: hidden; white-space: nowrap; border: 2px solid #1e293b !important; border-radius: 0.75rem; position: relative; height: 2.5rem; }
+  .marquee-text { position: absolute; right: 100%; top: 0; bottom: 0; display: flex; align-items: center; animation: marquee linear infinite; }
+  @keyframes marquee { 0% { right: 100%; } 100% { right: -100%; } }
+  
+  .card-hover { transition: transform 0.2s ease, box-shadow 0.2s ease; }
+  .card-hover:hover { transform: translateY(-4px) scale(1.02); box-shadow: 0 15px 25px -5px rgba(0,0,0,0.15); }
 </style>
 </head>
 <body class="text-gray-800 dark:text-gray-200 flex justify-center">
@@ -868,7 +1139,7 @@
       <input id="redeemCodeInput" type="text" placeholder="أدخل الكود هنا" class="w-full p-3 mb-3 text-center bg-gray-100 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl focus:outline-none focus:border-indigo-500">
       <button onclick="redeemCode()" class="w-full bg-indigo-600 text-white p-3 rounded-xl font-bold mb-3">تفعيل</button>
       <div class="border-t border-gray-100 dark:border-slate-700 pt-4 mt-2">
-        <a href="https://wa.me/963993865879" target="_blank" class="flex items-center justify-center gap-2 bg-green-500 text-white p-3 rounded-xl font-bold">
+        <a href="https://chat.whatsapp.com/HI042GjVcQRBh7YBDZrb5m" target="_blank" class="flex items-center justify-center gap-2 bg-green-500 text-white p-3 rounded-xl font-bold">
           <i class="fab fa-whatsapp text-xl"></i> الحصول على كود
         </a>
       </div>
@@ -902,13 +1173,17 @@
   </div>
 
   <div id="splashScreen" class="fixed inset-0 bg-gradient-to-br from-indigo-900 to-blue-800 flex flex-col justify-center items-center z-[100] transition-opacity duration-500">
-    <div class="animate-pulse text-center"><i class="fas fa-graduation-cap text-6xl text-white mb-4"></i><h1 class="text-3xl font-extrabold text-white px-6">منصة إنجاز الأكاديمية</h1></div>
+    <div class="animate-pulse text-center">
+      <i class="fas fa-graduation-cap text-6xl text-white mb-4"></i>
+      <h1 class="text-3xl font-extrabold text-white px-6">منصة إنجاز الأكاديمية</h1>
+      <p class="text-blue-200 text-xl mt-2">بنك الملفات التعليمية</p>
+    </div>
     <div class="absolute bottom-20 flex justify-center"><div class="w-10 h-10 border-4 border-indigo-200 border-t-white rounded-full animate-spin"></div></div>
   </div>
 
   <div id="appFrame" class="w-full max-w-2xl relative pb-24 min-h-screen overflow-hidden">
     <div class="absolute top-4 right-4 z-30 flex gap-2">
-      <button onclick="toggleMenu()" class="ctrl-btn bg-white/20 backdrop-blur-md text-white"><i class="fas fa-bars text-lg"></i></button>
+      <button id="menuBtn" onclick="toggleMenu(event)" class="ctrl-btn bg-white/20 backdrop-blur-md text-white"><i class="fas fa-bars text-lg"></i></button>
     </div>
     <div class="absolute top-4 left-4 z-30 flex gap-2">
       <button onclick="openCartScreen()" class="ctrl-btn bg-white/20 backdrop-blur-md text-white relative">
@@ -922,19 +1197,38 @@
       <i class="fas fa-crown text-xl"></i>
     </button>
 
-    <div id="socialMenu" class="hidden absolute top-16 right-4 w-56 bg-indigo-900/40 dark:bg-slate-900/60 backdrop-blur-xl rounded-2xl shadow-2xl py-2 z-30 border border-white/20">
-      <a href="https://wa.me/963993865879" target="_blank" class="flex items-center gap-3 px-4 py-3 text-white hover:bg-white/10"><i class="fab fa-whatsapp text-green-400 text-xl"></i> واتساب</a>
-      <a href="#" onclick="event.preventDefault(); requestBack(); setTimeout(()=>{ openPackagesScreen(); }, 10);" class="flex items-center gap-3 px-4 py-3 text-white hover:bg-white/10"><i class="fas fa-crown text-amber-400 text-xl"></i> الباقات</a>
-      <button id="authBtnNav" onclick="openAuthScreen()" class="w-full flex items-center gap-3 px-4 py-3 text-white hover:bg-white/10"><i class="fas fa-right-to-bracket text-blue-300 text-xl"></i> تسجيل الدخول</button>
+    <div id="socialMenu" class="hidden absolute top-16 right-4 w-60 bg-white dark:bg-slate-800 rounded-2xl shadow-2xl py-2 z-30 border border-gray-100 dark:border-slate-600">
+      <button onclick="toggleContactSub()" class="w-full flex items-center gap-3 px-4 py-3 text-gray-800 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-slate-700"><i class="fas fa-headset text-blue-500 text-xl"></i> تواصل معنا</button>
+      
+      <div id="contactSubMenu" class="hidden pl-4 pb-2">
+        <a href="https://wa.me/963997801717" target="_blank" class="flex items-center gap-2 px-4 py-2 text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-700 rounded-lg"><i class="fab fa-whatsapp text-green-500"></i> 0997801717</a>
+        <a href="https://wa.me/963993865879" target="_blank" class="flex items-center gap-2 px-4 py-2 text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-700 rounded-lg"><i class="fab fa-whatsapp text-green-500"></i> 0993865879</a>
+      </div>
+
+      <button id="soundToggleBtn" onclick="toggleSound()" class="w-full flex items-center gap-3 px-4 py-3 text-gray-800 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-slate-700"><i id="soundIcon" class="fas fa-volume-high text-amber-500 text-xl"></i> <span id="soundText">كتم الصوت</span></button>
+      
+      <button id="authBtnNav" class="w-full flex items-center gap-3 px-4 py-3 text-gray-800 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-slate-700"><i id="authIcon" class="fas fa-right-to-bracket text-indigo-500 text-xl"></i> <span id="authText">تسجيل الدخول</span></button>
+      
+      <div class="flex items-center justify-center gap-6 px-4 py-3 mt-2 border-t border-gray-100 dark:border-slate-700">
+        <a href="#" class="text-pink-500 text-2xl hover:scale-110 transition-transform"><i class="fab fa-instagram"></i></a>
+        <a href="#" class="text-blue-600 text-2xl hover:scale-110 transition-transform"><i class="fab fa-facebook"></i></a>
+      </div>
     </div>
 
     <header class="relative bg-gradient-to-br from-indigo-800 via-blue-800 to-blue-900 dark:from-slate-900 dark:to-slate-800 pt-12 pb-16 px-5 rounded-b-[2.5rem] shadow-xl overflow-hidden">
-      <div id="headerBgLayer" class="absolute inset-0 bg-cover bg-center mix-blend-overlay"></div>
+      <div id="headerBgLayer" class="absolute inset-0 bg-cover bg-center"></div>
+      <div id="headerOverlay" class="absolute inset-0 bg-gradient-to-br from-indigo-800 via-blue-800 to-blue-900 dark:from-slate-900 dark:to-slate-800"></div>
       <div class="relative z-10 flex flex-col items-center text-center text-white pt-8">
-        <img src="https://img.icons8.com/3d-fluency/96/graduation-cap.png" class="w-20 h-20 mb-3 drop-shadow-lg">
-        <h1 class="text-3xl font-extrabold tracking-tight drop-shadow-md">منصة إنجاز الأكاديمية</h1>
-        <p class="text-amber-300 mt-1 font-bold text-sm">البكالوريا العلمي - المنهاج السوري</p>
-        <p class="text-blue-200 mt-1 font-semibold text-lg">المساعد الأكاديمي التعليمي</p>
+        <img src="https://img.icons8.com/3d-fluency/96/graduation-cap.png" class="w-24 h-24 mb-3 drop-shadow-lg">
+        <h1 class="text-4xl font-extrabold tracking-tight drop-shadow-md">منصة إنجاز الأكاديمية</h1>
+        <p class="text-amber-300 mt-2 font-bold text-lg">البكالوريا العلمي - المنهاج السوري</p>
+        <p class="text-blue-200 mt-1 font-semibold text-xl">المساعد الأكاديمي التعليمي</p>
+        
+        <div class="flex gap-6 mt-4">
+          <a href="#" class="text-white text-2xl hover:scale-110 transition-transform"><i class="fab fa-instagram"></i></a>
+          <a href="#" class="text-white text-2xl hover:scale-110 transition-transform"><i class="fab fa-facebook"></i></a>
+          <a href="https://chat.whatsapp.com/HI042GjVcQRBh7YBDZrb5m" target="_blank" class="text-white text-2xl hover:scale-110 transition-transform"><i class="fab fa-whatsapp"></i></a>
+        </div>
       </div>
     </header>
 
@@ -949,8 +1243,8 @@
       </div>
     </div>
 
-    <div id="marqueeBar" class="mx-5 mb-6 py-2 px-4 rounded-xl text-sm font-bold marquee-container hidden" style="background-color: #f9731626; backdrop-filter: blur(8px); border: 1px solid rgba(249, 115, 22, 0.3);">
-      <span id="marqueeText" class="marquee-text" style="color: #f97316;"></span>
+    <div id="marqueeBar" class="mx-5 mb-6 py-2 px-4 text-sm font-bold marquee-container hidden" style="background-color: #f97316; border: 2px solid #1e293b;">
+      <span id="marqueeText" class="marquee-text" style="color: #ffffff;"></span>
     </div>
 
     <div id="homeScreen" class="p-4">
@@ -965,6 +1259,15 @@
         <div id="gridView">
           <h2 class="text-md font-bold text-gray-600 dark:text-gray-300 mb-3 flex items-center gap-2"><i class="fas fa-th-large text-indigo-500"></i> اختر المادة</h2>
           <div id="lessonsGrid" class="grid grid-cols-2 gap-4"></div>
+          
+          <div onclick="playClickSound(); openPackagesScreen();" class="card-hover mt-6 bg-gradient-to-l from-indigo-600 to-purple-600 text-white p-5 rounded-2xl shadow-lg flex items-center justify-between cursor-pointer active:scale-95 transition-transform">
+            <div class="flex flex-col">
+              <h3 class="font-bold text-lg">تفضل بالاطلاع على الباقات والعروض المميزة</h3>
+              <p class="text-indigo-200 text-sm mt-1">اشترك الآن لفتح جميع الدروس بلا حدود</p>
+            </div>
+            <i class="fas fa-arrow-left text-2xl"></i>
+          </div>
+
           <div id="sliderContainer" class="mt-8 hidden">
             <div class="rounded-2xl overflow-hidden shadow-lg bg-gray-200 dark:bg-slate-800 w-full" style="aspect-ratio: 16/9;"><img id="sliderImg" src="" class="w-full h-full object-cover transition-all duration-500"></div>
           </div>
@@ -1008,7 +1311,8 @@
 
   <div id="lessonFilesScreen" class="fixed inset-0 bg-slate-50 dark:bg-slate-900 z-[50] flex-col w-full pb-24" style="display:none;">
     <div class="relative bg-gradient-to-br from-indigo-800 via-blue-800 to-blue-900 dark:from-slate-900 dark:to-slate-800 pt-10 pb-12 px-5 rounded-b-[2rem] shadow-xl overflow-hidden w-full">
-      <div id="headerBgLayerFiles" class="absolute inset-0 bg-cover bg-center mix-blend-overlay"></div>
+      <div id="headerBgLayerFiles" class="absolute inset-0 bg-cover bg-center"></div>
+      <div id="headerBgLayerFilesOverlay" class="absolute inset-0 bg-gradient-to-br from-indigo-800 via-blue-800 to-blue-900 dark:from-slate-900 dark:to-slate-800"></div>
       <div class="relative z-10 flex flex-col items-center text-center text-white">
         <button onclick="closeLessonFiles()" class="absolute top-4 right-4 bg-white/20 p-2 rounded-full"><i class="fas fa-arrow-right text-lg"></i></button>
         <h1 class="text-2xl font-extrabold">ملحقات الدرس</h1>
@@ -1018,7 +1322,8 @@
     <div class="p-4 flex-1 overflow-y-auto w-full" id="filesContainer"></div>
   </div>
 
-  <div id="viewerScreen" class="fixed inset-0 bg-white dark:bg-slate-900 z-[60] flex-col relative w-full" style="display:none;">
+  <!-- إصلاح z-index: رفعها إلى 80 لتغطي شريط التنقل -->
+  <div id="viewerScreen" class="fixed inset-0 bg-white dark:bg-slate-900 z-[80] flex-col relative w-full" style="display:none;">
     <div class="watermark">منصة إنجاز الأكاديمية</div>
     <div class="sticky top-0 z-20 p-3 bg-white/95 dark:bg-slate-800/95 backdrop-blur-sm shadow-sm border-b border-gray-100 dark:border-slate-700 w-full">
       <div class="flex justify-between items-center bg-slate-100 dark:bg-slate-700 p-2 rounded-2xl gap-2">
