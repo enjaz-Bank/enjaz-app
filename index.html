@@ -16,7 +16,7 @@
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
   import { getFirestore, collection, onSnapshot, doc, getDoc, query, where, setDoc, updateDoc, getDocs, deleteDoc, documentId } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
-import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence, signInAnonymously } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js";
+  import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence, signInAnonymously } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js";
 
   const firebaseConfig = {
     apiKey: "AIzaSyAex1r9HHheqUgmjz6tbyLuob3yA4JXGfk",
@@ -33,7 +33,6 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
   const auth = getAuth(app);
   setPersistence(auth, browserLocalPersistence).catch(e => console.warn('persistence:', e));
 
-  // ✅ توليد كود استرجاع
   function generateRecoveryCode() {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     let code = 'ENJ-';
@@ -80,9 +79,9 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
 
   // 🆕 متغيرات الشاشتين الجديدتين
   let currentExtraFiles = [];
-  let activeExtraCategory = null; // 'training' | 'support'
+  let activeExtraCategory = null;
   let activeExtraFilesUnsub = null;
-  let viewerSource = 'lessonFiles'; // 'lessonFiles' | 'trainingScreen' | 'supportScreen' | 'library'
+  let viewerSource = 'lessonFiles';
 
   const CACHE_KEY_LESSONS = 'enjaz_lessons_cache_v6';
   const CACHE_KEY_CART = 'enjaz_cart_cache';
@@ -104,6 +103,42 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
   let appStack = [];
 
   window.setTopBarVisible = function(v) { /* no-op */ };
+
+  // ============ 🆕 دوال موحدة لجلب الملفات ============
+  async function getFileById(fileId) {
+    let snap = await getDoc(doc(db, "files", fileId));
+    if (!snap.exists()) snap = await getDoc(doc(db, "extraFiles", fileId));
+    return snap;
+  }
+
+  async function fetchFilesFromAnyCollection(ids) {
+    if (!ids || ids.length === 0) return [];
+    const chunkSize = 30;
+    const chunks = [];
+    for (let i = 0; i < ids.length; i += chunkSize) chunks.push(ids.slice(i, i + chunkSize));
+    
+    const found = [];
+    const foundIds = new Set();
+    
+    const filesResults = await Promise.all(chunks.map(chunk =>
+      getDocs(query(collection(db, "files"), where(documentId(), "in", chunk)))
+        .catch(e => { console.warn('files chunk fail:', e); return { forEach: () => {} }; })
+    ));
+    filesResults.forEach(snap => snap.forEach(d => { found.push({ id: d.id, ...d.data() }); foundIds.add(d.id); }));
+    
+    const remaining = ids.filter(id => !foundIds.has(id));
+    if (remaining.length > 0) {
+      const extraChunks = [];
+      for (let i = 0; i < remaining.length; i += chunkSize) extraChunks.push(remaining.slice(i, i + chunkSize));
+      const extraResults = await Promise.all(extraChunks.map(chunk =>
+        getDocs(query(collection(db, "extraFiles"), where(documentId(), "in", chunk)))
+          .catch(e => { console.warn('extraFiles chunk fail:', e); return { forEach: () => {} }; })
+      ));
+      extraResults.forEach(snap => snap.forEach(d => found.push({ id: d.id, ...d.data() })));
+    }
+    
+    return found;
+  }
 
   async function rebuildUserAccessCache() {
     userAccessCache = { hasFullPackage: false, subjects: new Set(), extraFileIds: new Set(), packagesSettingsCache: {} };
@@ -146,7 +181,6 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
   }
   window.canAccessFile = canAccessFile;
 
-  // 🆕 صلاحيات الملفات الإضافية (نماذج + دعم)
   function canAccessExtraFile(f) {
     if (!f) return false;
     if (!f.isPremium) return true;
@@ -528,7 +562,6 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
     if (nameWrapper) nameWrapper.classList.toggle('hidden', isLogin);
   }
 
-  // ✅ المرحلة 1: السلة في sessionStorage (تُمسح عند إغلاق المتصفح)
   function saveCart() { 
     try { sessionStorage.setItem(CACHE_KEY_CART, JSON.stringify(cart)); } catch(e) {} 
   }
@@ -548,7 +581,6 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
   }
   window.clearLibraryCache = clearLibraryCache;
 
-  // ✅ عرض popup كود الاسترجاع
   window.showRecoveryCodePopup = function(code) {
     const popup = document.getElementById('recoveryCodeModal');
     document.getElementById('recoveryCodeValue').innerText = code;
@@ -570,7 +602,6 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
     document.getElementById('recoveryCodeModal').classList.remove('flex');
   };
 
-  // ✅ استرجاع المشتريات من كود
   window.recoverPurchases = async function() {
     const input = document.getElementById('recoverCodeInput');
     const code = input.value.trim().toUpperCase();
@@ -737,18 +768,16 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
     errBox.classList.add('hidden'); successBox.classList.add('hidden');
 
     try {
-     // ✅ الجديد — يدعم الأكواد القديمة والجديدة:
-let codeRef = doc(db, "codes", codeInput);
-let codeSnap = await getDoc(codeRef);
-
-if (!codeSnap.exists()) {
-  // البحث بالحقل (للأكواد القديمة التي IDها عشوائي)
-  const q = query(collection(db, "codes"), where("code", "==", codeInput));
-  const qSnap = await getDocs(q);
-  if (qSnap.empty) throw new Error("الكود غير صحيح");
-  codeRef = qSnap.docs[0].ref;
-  codeSnap = qSnap.docs[0];
-}
+      // ✅ دعم الأكواد القديمة والجديدة
+      let codeRef = doc(db, "codes", codeInput);
+      let codeSnap = await getDoc(codeRef);
+      if (!codeSnap.exists()) {
+        const q = query(collection(db, "codes"), where("code", "==", codeInput));
+        const qSnap = await getDocs(q);
+        if (qSnap.empty) throw new Error("الكود غير صحيح");
+        codeRef = qSnap.docs[0].ref;
+        codeSnap = qSnap.docs[0];
+      }
       
       const codeData = codeSnap.data();
       if (codeData.isUsed === true) throw new Error("الكود مستخدم بالفعل");
@@ -801,7 +830,6 @@ if (!codeSnap.exists()) {
               usedCount: 0
             });
             currentUserData.recoveryCode = newCode;
-            console.log('🔑 كود الاسترجاع:', newCode);
           } catch(e) {
             console.warn('⚠️ فشل توليد كود الاسترجاع:', e.message);
           }
@@ -932,16 +960,17 @@ if (!codeSnap.exists()) {
     </div>`;
   }
 
+  // ✅ محدّث: يبحث في files ثم extraFiles
   window.downloadLibraryFile = async function(fileId) {
     playClickSound();
     try {
-      const docSnap = await getDoc(doc(db, "files", fileId));
+      const docSnap = await getFileById(fileId);
       if (!docSnap.exists()) { alert("الملف غير موجود"); return; }
       const f = docSnap.data();
       
       const a = document.createElement('a');
       a.href = f.fileData;
-      a.download = f.fileName || 'درس';
+      a.download = f.fileName || 'ملف';
       a.target = '_blank';
       document.body.appendChild(a);
       a.click();
@@ -1026,15 +1055,8 @@ if (!codeSnap.exists()) {
         </div>
       </div>`;
 
-      const chunkSize = 30;
-      const guestChunks = [];
-      for (let i = 0; i < purchasedFiles.length; i += chunkSize) guestChunks.push(purchasedFiles.slice(i, i + chunkSize));
-      const guestResults = await Promise.all(guestChunks.map(chunk =>
-        getDocs(query(collection(db, "files"), where(documentId(), "in", chunk)))
-          .catch(e => { console.warn('guest chunk fail:', e); return { forEach: () => {} }; })
-      ));
-      const guestFiles = [];
-      guestResults.forEach(snap => snap.forEach(d => guestFiles.push({ id: d.id, ...d.data() })));
+      // ✅ محدّث: جلب من files + extraFiles
+      const guestFiles = await fetchFilesFromAnyCollection(purchasedFiles);
       
       if (guestFiles.length > 0) {
         html += `<h3 class="font-bold text-md text-gray-800 dark:text-gray-100 mb-3 flex items-center gap-2">
@@ -1123,16 +1145,8 @@ if (!codeSnap.exists()) {
     }
 
     if (allExtraFileIds.size > 0) {
-      const extraIdsArray = Array.from(allExtraFileIds);
-      const chunkSize = 30;
-      const extraChunks = [];
-      for (let i = 0; i < extraIdsArray.length; i += chunkSize) extraChunks.push(extraIdsArray.slice(i, i + chunkSize));
-      const extraResults = await Promise.all(extraChunks.map(chunk =>
-        getDocs(query(collection(db, "files"), where(documentId(), "in", chunk)))
-          .catch(e => { console.warn('extra chunk fail:', e); return { forEach: () => {} }; })
-      ));
-      const extraFiles = [];
-      extraResults.forEach(snap => snap.forEach(d => extraFiles.push({ id: d.id, ...d.data() })));
+      // ✅ محدّث: يستخدم الدالة الموحدة
+      const extraFiles = await fetchFilesFromAnyCollection(Array.from(allExtraFileIds));
       
       if (extraFiles.length > 0) {
         html += `<h3 class="font-bold text-md text-gray-800 dark:text-gray-100 mb-3 flex items-center gap-2 mt-6">
@@ -1146,15 +1160,8 @@ if (!codeSnap.exists()) {
     const individualPurchases = purchasedFiles.filter(fid => !allExtraFileIds.has(fid));
     
     if (individualPurchases.length > 0) {
-      const chunkSize = 30;
-      const indChunks = [];
-      for (let i = 0; i < individualPurchases.length; i += chunkSize) indChunks.push(individualPurchases.slice(i, i + chunkSize));
-      const indResults = await Promise.all(indChunks.map(chunk =>
-        getDocs(query(collection(db, "files"), where(documentId(), "in", chunk)))
-          .catch(e => { console.warn('individual chunk fail:', e); return { forEach: () => {} }; })
-      ));
-      const individualFiles = [];
-      indResults.forEach(snap => snap.forEach(d => individualFiles.push({ id: d.id, ...d.data() })));
+      // ✅ محدّث: جلب من files + extraFiles
+      const individualFiles = await fetchFilesFromAnyCollection(individualPurchases);
       
       if (individualFiles.length > 0) {
         html += `<h3 class="font-bold text-md text-gray-800 dark:text-gray-100 mb-3 flex items-center gap-2 mt-6">
@@ -1186,10 +1193,11 @@ if (!codeSnap.exists()) {
     }
   }
 
+  // ✅ محدّث: يبحث في files ثم extraFiles
   window.openLibraryFile = async function(fileId) {
     playClickSound();
-    const docSnap = await getDoc(doc(db, "files", fileId));
-    if (!docSnap.exists()) { alert("الدرس غير موجود"); return; }
+    const docSnap = await getFileById(fileId);
+    if (!docSnap.exists()) { alert("الملف غير موجود"); return; }
     const f = { id: docSnap.id, ...docSnap.data() };
     currentViewingFile = f;
     viewerSource = 'library';
@@ -1291,7 +1299,6 @@ if (!codeSnap.exists()) {
     if (filesLayer) { filesLayer.style.backgroundImage = `url(${bgUrl})`; filesLayer.style.opacity = 1; }
     const filesOverlay = document.getElementById('headerBgLayerFilesOverlay'); 
     if (filesOverlay) { filesOverlay.style.opacity = ((opacity || 30) - 10) / 100; }
-    // 🆕 الشاشتان الجديدتان
     const trainLayer = document.getElementById('headerBgLayerTraining');
     if (trainLayer) { trainLayer.style.backgroundImage = `url(${bgUrl})`; trainLayer.style.opacity = 1; }
     const trainOverlay = document.getElementById('headerBgLayerTrainingOverlay');
@@ -1640,7 +1647,7 @@ if (!codeSnap.exists()) {
     } catch(e) { alert("تعذر فتح نافذة الطباعة."); overlay.classList.add('hidden'); overlay.classList.remove('flex'); }
   };
 
-  // ============ 🆕 شاشتا النماذج والدعم ============
+  // ============ شاشتا النماذج والدعم ============
   function loadExtraFilesScreen(category) {
     const containerId = category === 'training' ? 'trainingContainer' : 'supportContainer';
     const container = document.getElementById(containerId);
@@ -2327,7 +2334,6 @@ if (!codeSnap.exists()) {
     <div class="p-4 flex-1 overflow-y-auto w-full" id="filesContainer"></div>
   </div>
 
-  <!-- 🆕 شاشة النماذج الامتحانية -->
   <div id="trainingScreen" class="fixed inset-0 mx-auto max-w-2xl bg-slate-50 dark:bg-slate-900 z-[50] flex-col w-full pb-24" style="display:none;">
     <div class="relative bg-gradient-to-br from-indigo-800 via-blue-800 to-blue-900 dark:from-slate-900 dark:to-slate-800 pt-16 pb-12 px-5 rounded-b-[2rem] shadow-xl overflow-hidden w-full">
       <div id="headerBgLayerTraining" class="absolute inset-0 bg-cover bg-center"></div>
@@ -2341,7 +2347,6 @@ if (!codeSnap.exists()) {
     <div class="p-4 flex-1 overflow-y-auto w-full" id="trainingContainer"></div>
   </div>
 
-  <!-- 🆕 شاشة ملفات الدعم والتقوية -->
   <div id="supportScreen" class="fixed inset-0 mx-auto max-w-2xl bg-slate-50 dark:bg-slate-900 z-[50] flex-col w-full pb-24" style="display:none;">
     <div class="relative bg-gradient-to-br from-teal-600 via-emerald-700 to-cyan-800 dark:from-slate-900 dark:to-slate-800 pt-16 pb-12 px-5 rounded-b-[2rem] shadow-xl overflow-hidden w-full">
       <div id="headerBgLayerSupport" class="absolute inset-0 bg-cover bg-center"></div>
