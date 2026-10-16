@@ -737,9 +737,18 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
     errBox.classList.add('hidden'); successBox.classList.add('hidden');
 
     try {
-      const codeRef = doc(db, "codes", codeInput);
-      const codeSnap = await getDoc(codeRef);
-      if (!codeSnap.exists()) throw new Error("الكود غير صحيح");
+     // ✅ الجديد — يدعم الأكواد القديمة والجديدة:
+let codeRef = doc(db, "codes", codeInput);
+let codeSnap = await getDoc(codeRef);
+
+if (!codeSnap.exists()) {
+  // البحث بالحقل (للأكواد القديمة التي IDها عشوائي)
+  const q = query(collection(db, "codes"), where("code", "==", codeInput));
+  const qSnap = await getDocs(q);
+  if (qSnap.empty) throw new Error("الكود غير صحيح");
+  codeRef = qSnap.docs[0].ref;
+  codeSnap = qSnap.docs[0];
+}
       
       const codeData = codeSnap.data();
       if (codeData.isUsed === true) throw new Error("الكود مستخدم بالفعل");
