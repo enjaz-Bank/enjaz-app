@@ -78,6 +78,12 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
   let appCurrency = 'ل.س';
   let userAccessCache = { hasFullPackage: false, subjects: new Set(), extraFileIds: new Set(), packagesSettingsCache: {} };
 
+  // 🆕 متغيرات الشاشتين الجديدتين
+  let currentExtraFiles = [];
+  let activeExtraCategory = null; // 'training' | 'support'
+  let activeExtraFilesUnsub = null;
+  let viewerSource = 'lessonFiles'; // 'lessonFiles' | 'trainingScreen' | 'supportScreen' | 'library'
+
   const CACHE_KEY_LESSONS = 'enjaz_lessons_cache_v6';
   const CACHE_KEY_CART = 'enjaz_cart_cache';
   const CACHE_KEY_GUEST = 'enjaz_guest_purchases';
@@ -140,6 +146,19 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
   }
   window.canAccessFile = canAccessFile;
 
+  // 🆕 صلاحيات الملفات الإضافية (نماذج + دعم)
+  function canAccessExtraFile(f) {
+    if (!f) return false;
+    if (!f.isPremium) return true;
+    if (guestPurchases.includes(f.id)) return true;
+    if (!currentUser) return false;
+    if (userAccessCache.hasFullPackage) return true;
+    if (userAccessCache.extraFileIds.has(f.id)) return true;
+    if ((currentUserData?.purchasedFiles || []).includes(f.id)) return true;
+    return false;
+  }
+  window.canAccessExtraFile = canAccessExtraFile;
+
   function pushScreen(name, data) { 
     navLevel++; 
     appStack.push({ name, data: data || null }); 
@@ -154,12 +173,31 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
   function applyCloseForState(state) {
     if (!state) return;
     switch (state.name) {
-      case 'viewer':
+      case 'viewer': {
         document.getElementById('viewerScreen').style.display = 'none';
-        document.getElementById('lessonFilesScreen').style.display = 'flex';
         document.getElementById('viewerFrame').srcdoc = '';
         document.getElementById('viewerFrame').src = 'about:blank';
-        loadLibrary(); break;
+        if (viewerSource === 'trainingScreen') {
+          document.getElementById('trainingScreen').style.display = 'flex';
+        } else if (viewerSource === 'supportScreen') {
+          document.getElementById('supportScreen').style.display = 'flex';
+        } else {
+          document.getElementById('lessonFilesScreen').style.display = 'flex';
+          loadLibrary();
+        }
+        viewerSource = 'lessonFiles';
+        break;
+      }
+      case 'trainingScreen':
+        document.getElementById('trainingScreen').style.display = 'none';
+        document.getElementById('appFrame').style.display = 'block';
+        if (activeExtraFilesUnsub) { activeExtraFilesUnsub(); activeExtraFilesUnsub = null; }
+        break;
+      case 'supportScreen':
+        document.getElementById('supportScreen').style.display = 'none';
+        document.getElementById('appFrame').style.display = 'block';
+        if (activeExtraFilesUnsub) { activeExtraFilesUnsub(); activeExtraFilesUnsub = null; }
+        break;
       case 'lessonFiles':
         document.getElementById('lessonFilesScreen').style.display = 'none';
         document.getElementById('appFrame').style.display = 'block';
@@ -272,6 +310,8 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
     document.getElementById('viewerScreen').style.display = 'none';
     document.getElementById('packagesScreen').style.display = 'none';
     document.getElementById('cartScreen').style.display = 'none';
+    document.getElementById('trainingScreen').style.display = 'none';
+    document.getElementById('supportScreen').style.display = 'none';
     document.getElementById('appFrame').style.display = 'block';
     if (tabName === 'lessonsContainer') { document.getElementById('listView').style.display = 'none'; document.getElementById('gridView').style.display = 'block'; currentView = 'grid'; }
     if (tabName === 'savedContainer') renderBookmarks();
@@ -488,13 +528,12 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
     if (nameWrapper) nameWrapper.classList.toggle('hidden', isLogin);
   }
 
-    // ✅ المرحلة 1: السلة في sessionStorage (تُمسح عند إغلاق المتصفح)
+  // ✅ المرحلة 1: السلة في sessionStorage (تُمسح عند إغلاق المتصفح)
   function saveCart() { 
     try { sessionStorage.setItem(CACHE_KEY_CART, JSON.stringify(cart)); } catch(e) {} 
   }
   function loadCart() { 
     try { 
-      // تنظيف النسخة القديمة من localStorage (إن وُجدت)
       localStorage.removeItem(CACHE_KEY_CART);
       const s = sessionStorage.getItem(CACHE_KEY_CART); 
       if (s) cart = JSON.parse(s); 
@@ -556,14 +595,12 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
       
       if (remoteFiles.length === 0) throw new Error("لا توجد مشتريات في هذا الكود");
       
-      // دمج مع المشتريات الحالية
       const current = currentUserData.purchasedFiles || [];
       const merged = [...new Set([...current, ...remoteFiles])];
       
       await updateDoc(doc(db, "users", currentUser.uid), { purchasedFiles: merged });
       currentUserData.purchasedFiles = merged;
       
-      // زيادة عداد الاستخدام
       try {
         await updateDoc(doc(db, "recoveryCodes", code), {
           usedCount: (codeData.usedCount || 0) + 1,
@@ -724,7 +761,6 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
         const cartFileIds = cart.map(f => f.id);
         if (cartFileIds.length === 0) throw new Error("السلة فارغة");
         
-        // ✅ المرحلة 2.3: دائماً احفظ في Firestore (سواء زائر أو مسجل)
         if (currentUser) {
           const userRef = doc(db, "users", currentUser.uid);
           const freshSnap = await getDoc(userRef);
@@ -741,12 +777,10 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
           currentUserData = { ...freshData, purchasedFiles: merged };
           await rebuildUserAccessCache();
         }
-        // ملاحظة: لم نعد بحاجة لـ localStorage — currentUser موجود دائماً
         
         cart = []; saveCart(); updateCartBadge();
         clearLibraryCache();
         
-        // ✅ توليد كود استرجاع للزوار (بعد أول شراء فقط)
         if (currentUser && currentUser.isAnonymous && !currentUserData.recoveryCode) {
           try {
             const newCode = generateRecoveryCode();
@@ -763,7 +797,6 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
             console.warn('⚠️ فشل توليد كود الاسترجاع:', e.message);
           }
         } else if (currentUser && currentUser.isAnonymous && currentUserData.recoveryCode) {
-          // مزامنة المشتريات مع وثيقة الكود
           try {
             await updateDoc(doc(db, "recoveryCodes", currentUserData.recoveryCode), {
               purchasedFiles: currentUserData.purchasedFiles || []
@@ -785,7 +818,6 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
           navLevel = 0;
           try { history.replaceState({ level: 0 }, ''); } catch(e) {}
           showAppTab('libraryContainer');
-          // ✅ عرض كود الاسترجاع للزوار
           if (codeToShow) {
             setTimeout(() => window.showRecoveryCodePopup(codeToShow), 500);
           }
@@ -793,7 +825,7 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
         return;
       }
 
-            if (codeData.type === 'package') {
+      if (codeData.type === 'package') {
         if (!currentUser || currentUser.isAnonymous) throw new Error("أكواد الباقات تتطلب تسجيل الدخول بحساب حقيقي");
 
         const userRef = doc(db, "users", currentUser.uid);
@@ -942,16 +974,14 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
       </div>`;
     }
 
-    // ✅ المرحلة 2.3: الزوار المجهولون يقرؤون مشترياتهم من Firestore
     if (currentUser && currentUser.isAnonymous) {
       const purchasedFiles = currentUserData?.purchasedFiles || [];
       
-      // ✅ زر استرجاع (يظهر دائماً للزوار)
       html += `<button onclick="openRecoverModal()" class="w-full bg-gradient-to-l from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600 text-white py-3 rounded-xl font-bold text-sm shadow-md active:scale-95 transition-transform mb-4 flex items-center justify-center gap-2">
         <i class="fas fa-key"></i> استرجاع مشتريات من جهاز آخر
       </button>`;
       
-          if (purchasedFiles.length === 0) {
+      if (purchasedFiles.length === 0) {
         html += `<div class="text-center mt-10 text-gray-400">
           <i class="fas fa-book-bookmark text-5xl mb-4 block"></i>
           <p>لا توجد مشتريات على هذا الجهاز.</p>
@@ -1010,7 +1040,6 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
       return;
     }
 
-    // إذا لا يوجد مستخدم (نادراً ما يحدث مع Anonymous Auth)
     if (!currentUser) {
       c.innerHTML = `<div class="text-center mt-20 text-gray-400"><i class="fas fa-book-bookmark text-5xl mb-4 block"></i><p>جاري التحميل...</p></div>`;
       return;
@@ -1154,6 +1183,7 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
     if (!docSnap.exists()) { alert("الدرس غير موجود"); return; }
     const f = { id: docSnap.id, ...docSnap.data() };
     currentViewingFile = f;
+    viewerSource = 'library';
     document.getElementById('lessonTitle').innerText = f.fileName;
     const frame = document.getElementById('viewerFrame');
     frame.onload = null;
@@ -1252,6 +1282,15 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
     if (filesLayer) { filesLayer.style.backgroundImage = `url(${bgUrl})`; filesLayer.style.opacity = 1; }
     const filesOverlay = document.getElementById('headerBgLayerFilesOverlay'); 
     if (filesOverlay) { filesOverlay.style.opacity = ((opacity || 30) - 10) / 100; }
+    // 🆕 الشاشتان الجديدتان
+    const trainLayer = document.getElementById('headerBgLayerTraining');
+    if (trainLayer) { trainLayer.style.backgroundImage = `url(${bgUrl})`; trainLayer.style.opacity = 1; }
+    const trainOverlay = document.getElementById('headerBgLayerTrainingOverlay');
+    if (trainOverlay) trainOverlay.style.opacity = (opacity || 30) / 100;
+    const supLayer = document.getElementById('headerBgLayerSupport');
+    if (supLayer) { supLayer.style.backgroundImage = `url(${bgUrl})`; supLayer.style.opacity = 1; }
+    const supOverlay = document.getElementById('headerBgLayerSupportOverlay');
+    if (supOverlay) supOverlay.style.opacity = (opacity || 30) / 100;
   }
 
   window.loadAppSettings = async function() {
@@ -1547,6 +1586,7 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
       return;
     }
     currentViewingFile = f;
+    viewerSource = 'lessonFiles';
     document.getElementById('lessonTitle').innerText = f.fileName;
     const frame = document.getElementById('viewerFrame');
     frame.onload = null;
@@ -1591,6 +1631,132 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
     } catch(e) { alert("تعذر فتح نافذة الطباعة."); overlay.classList.add('hidden'); overlay.classList.remove('flex'); }
   };
 
+  // ============ 🆕 شاشتا النماذج والدعم ============
+  function loadExtraFilesScreen(category) {
+    const containerId = category === 'training' ? 'trainingContainer' : 'supportContainer';
+    const container = document.getElementById(containerId);
+    
+    container.innerHTML = `<div class="text-center mt-10"><div class="w-8 h-8 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin mx-auto"></div></div>`;
+    
+    if (activeExtraFilesUnsub) { activeExtraFilesUnsub(); activeExtraFilesUnsub = null; }
+    
+    const q = query(collection(db, "extraFiles"), where("category", "==", category));
+    activeExtraFilesUnsub = onSnapshot(q, (snap) => {
+      currentExtraFiles = [];
+      snap.forEach(d => currentExtraFiles.push({ id: d.id, category, ...d.data() }));
+      currentExtraFiles.sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
+      
+      if (currentExtraFiles.length === 0) {
+        container.innerHTML = `<div class="text-center mt-20 text-gray-400"><i class="far fa-folder-open text-5xl mb-4 block"></i><p>لا توجد ملفات.</p></div>`;
+        return;
+      }
+      
+      let html = `<div class="space-y-4 mt-2">`;
+      currentExtraFiles.forEach((f, index) => {
+        const hasAccess = canAccessExtraFile(f);
+        const numBadge = `<span class="w-8 h-8 bg-indigo-100 dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 rounded-full flex items-center justify-center font-bold text-sm flex-shrink-0">${index + 1}</span>`;
+        const lockBadge = f.isPremium 
+          ? (hasAccess 
+              ? '<span class="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded font-bold">✓ مشترك</span>' 
+              : '<span class="text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded font-bold">مدفوع</span>')
+          : '<span class="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded font-bold">مجاني</span>';
+        
+        const priceBox = (f.isPremium && f.price && !hasAccess) 
+          ? `<div class="text-xs font-extrabold text-amber-700 bg-amber-50 dark:bg-amber-900/30 border-2 border-amber-300 rounded-lg px-2 py-1 whitespace-nowrap">💰 ${f.price} ${appCurrency}</div>` 
+          : '';
+        
+        html += `<div class="card-hover bg-gradient-to-l from-blue-50 to-indigo-50 dark:from-slate-800 dark:to-slate-700 p-4 rounded-2xl shadow-md border border-white dark:border-slate-600 flex items-center justify-between gap-2">
+          <div class="flex items-center gap-3 flex-1 min-w-0">
+            ${numBadge}
+            <div class="flex flex-col min-w-0">
+              <h4 class="font-bold text-sm text-gray-800 dark:text-gray-200 truncate">${f.fileName}</h4>
+              <div class="flex gap-1 mt-1 items-center flex-wrap">${lockBadge}</div>
+            </div>
+          </div>
+          <div class="flex gap-2 items-center flex-shrink-0">
+            ${priceBox}
+            <button onclick="playClickSound(); viewExtraFileByIndex(${index})" class="bg-blue-500 text-white text-xs px-4 py-2 rounded-lg font-bold flex items-center gap-1 hover:bg-blue-600 transition-colors" aria-label="عرض"><i class="fas fa-eye"></i> عرض</button>
+            <button onclick="handleExtraFileDownload(${index})" class="bg-emerald-50 dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 p-2.5 rounded-lg border border-emerald-100 dark:border-slate-700 hover:bg-emerald-100 transition-colors" aria-label="تحميل"><i class="fas fa-download"></i></button>
+          </div>
+        </div>`;
+      });
+      html += `</div>`;
+      container.innerHTML = html;
+    });
+  }
+
+  window.openTrainingScreen = function(skipPush = false) {
+    if (typeof skipPush !== 'boolean') skipPush = false;
+    playClickSound();
+    activeExtraCategory = 'training';
+    document.getElementById('trainingScreen').style.display = 'flex';
+    document.getElementById('appFrame').style.display = 'none';
+    if (!skipPush) pushScreen('trainingScreen');
+    loadExtraFilesScreen('training');
+  };
+
+  window.openSupportScreen = function(skipPush = false) {
+    if (typeof skipPush !== 'boolean') skipPush = false;
+    playClickSound();
+    activeExtraCategory = 'support';
+    document.getElementById('supportScreen').style.display = 'flex';
+    document.getElementById('appFrame').style.display = 'none';
+    if (!skipPush) pushScreen('supportScreen');
+    loadExtraFilesScreen('support');
+  };
+
+  window.closeTrainingScreen = function() { requestBack(); };
+  window.closeSupportScreen = function() { requestBack(); };
+
+  window.viewExtraFileByIndex = async function(index) {
+    const f = currentExtraFiles[index];
+    if (!f) return;
+    if (f.isPremium && !canAccessExtraFile(f)) {
+      document.getElementById('singleBuyFileName').innerText = f.fileName + (f.price ? ` - السعر: ${f.price} ${appCurrency}` : '');
+      document.getElementById('addSingleToCartBtn').onclick = function() { addToCart(f.id, f.fileName, f.price); };
+      openSingleBuyModal();
+      return;
+    }
+    currentViewingFile = f;
+    viewerSource = activeExtraCategory === 'training' ? 'trainingScreen' : 'supportScreen';
+    document.getElementById('lessonTitle').innerText = f.fileName;
+    const frame = document.getElementById('viewerFrame');
+    frame.onload = null;
+    document.getElementById('viewerScreen').style.display = 'flex';
+    document.getElementById(activeExtraCategory === 'training' ? 'trainingScreen' : 'supportScreen').style.display = 'none';
+    pushScreen('viewer');
+    frame.src = "about:blank";
+    frame.srcdoc = `<div style="display:flex;justify-content:center;align-items:center;height:90vh;font-family:sans-serif;color:#666;"><div style="text-align:center;"><div style="border:4px solid #f3f3f3;border-top:4px solid #4f46e5;border-radius:50%;width:40px;height:40px;animation:spin 1s linear infinite;margin:0 auto;"></div></div><style>@keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}</style></div>`;
+    try {
+      const result = await prepareFrameContent(f.fileData, f.isExternal, f.isPdf, f.fileName);
+      if (result.type === 'url') {
+        const isExternal = result.content.startsWith('http://') || result.content.startsWith('https://');
+        setFrameSandbox(frame, isExternal);
+        frame.src = result.content;
+      } else {
+        setFrameSandbox(frame, false);
+        frame.srcdoc = result.content;
+      }
+    } catch (e) { frame.srcdoc = `<div style="text-align:center;padding:20px;color:red;">خطأ</div>`; }
+  };
+
+  window.handleExtraFileDownload = function(index) {
+    playClickSound();
+    const f = currentExtraFiles[index];
+    if (!f) return;
+    if (f.isPremium && !canAccessExtraFile(f)) {
+      showPremiumModal();
+      return;
+    }
+    const a = document.createElement('a');
+    a.href = f.fileData;
+    a.download = f.fileName || 'ملف';
+    a.target = '_blank';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
   window.openExamFile = function(url, title) {
     playClickSound();
     if (!url) { alert("الملف غير متوفر"); return; }
@@ -1629,15 +1795,12 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
     if (user) {
       currentUser = user;
       
-      // ✅ المرحلة 2.2: التمييز بين الزائر المجهول والعضو المسجل
-           if (user.isAnonymous) {
+      if (user.isAnonymous) {
         console.log('✅ [Anonymous Session] UID:', user.uid);
-        // الزائر المجهول → واجهة "تسجيل الدخول"
         if (authText) authText.innerText = "تسجيل الدخول";
         if (authIcon) authIcon.className = "fas fa-right-to-bracket text-indigo-500 text-xl";
         if (authBtn) authBtn.onclick = (e) => { e.preventDefault(); openAuthScreen(); };
         
-        // ✅ الخطوة 2.3: تحميل بيانات الزائر من Firestore
         try {
           const userRef = doc(db, "users", user.uid);
           const userDoc = await getDoc(userRef);
@@ -1646,7 +1809,6 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
             currentUserData = userDoc.data();
             console.log('📦 [Anonymous] بيانات موجودة:', currentUserData.purchasedFiles?.length || 0, 'ملف');
           } else {
-            // زائر جديد — إنشاء وثيقة
             currentUserData = {
               email: null,
               name: '',
@@ -1666,12 +1828,10 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
         
         userAccessCache = { hasFullPackage: false, subjects: new Set(), extraFileIds: new Set(), packagesSettingsCache: {} };
         
-        // تحديث المكتبة إن كانت معروضة
         if (!document.getElementById('libraryContainer').classList.contains('hidden')) loadLibrary();
         return;
       }
       
-      // عضو مسجل → الكود الحالي كما هو
       if (authText) authText.innerText = "تسجيل الخروج";
       if (authIcon) authIcon.className = "fas fa-right-from-bracket text-red-500 text-xl";
       if (authBtn) authBtn.onclick = (e) => { e.preventDefault(); handleLogout(); };
@@ -1720,17 +1880,14 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
         console.warn('onAuthStateChanged error:', e);
         currentUserData = { activePackages: [], activePackageSubjects: [], purchasedFiles: [], ownedPackages: [] }; 
       }
-       } else {
-      // ✅ المرحلة 2.2: تسجيل دخول مجهول تلقائياً للزوار
+    } else {
       try {
         await signInAnonymously(auth);
-        // onAuthStateChanged سيُستدعى مرة أخرى مع user.isAnonymous = true
         return;
       } catch(e) {
         console.warn('⚠️ Anonymous sign-in failed:', e.code, e.message);
       }
       
-      // Fallback: حالة عدم الاتصال
       currentUser = null; 
       currentUserData = null; 
       bookmarks = [];
@@ -1777,6 +1934,10 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
           openCartScreen(true);
         } else if (last.name === 'subjectList' && last.data?.subject) {
           openSubject(last.data.subject, true);
+        } else if (last.name === 'trainingScreen') {
+          openTrainingScreen(true);
+        } else if (last.name === 'supportScreen') {
+          openSupportScreen(true);
         } else if (last.name === 'viewer' && stack.length >= 2) {
           const prev = stack[stack.length - 2];
           if (prev.name === 'lessonFiles' && prev.data?.lessonId) {
@@ -2077,7 +2238,7 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
           <div id="lessonsGrid" class="grid grid-cols-2 gap-4"></div>
 
           <div class="grid grid-cols-2 gap-4 mt-4">
-            <div onclick="playClickSound(); showAppTab('examsContainer')" class="card-hover bg-gradient-to-br from-indigo-500 to-violet-700 p-4 rounded-3xl shadow-lg cursor-pointer active:scale-95 transition-transform duration-150 h-40 flex flex-col justify-between text-white relative overflow-hidden" role="button" tabindex="0" aria-label="نماذج امتحانية و تدريب">
+            <div onclick="playClickSound(); openTrainingScreen()" class="card-hover bg-gradient-to-br from-indigo-500 to-violet-700 p-4 rounded-3xl shadow-lg cursor-pointer active:scale-95 transition-transform duration-150 h-40 flex flex-col justify-between text-white relative overflow-hidden" role="button" tabindex="0" aria-label="نماذج امتحانية و تدريب">
               <div class="absolute top-0 left-0 w-24 h-24 bg-white/10 rounded-full -mt-10 -ml-10"></div>
               <div class="flex justify-between items-start relative z-10">
                 <i class="fas fa-file-pen text-3xl opacity-90" aria-hidden="true"></i>
@@ -2085,7 +2246,7 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
               </div>
               <h3 class="text-lg font-extrabold leading-tight relative z-10">نماذج امتحانية و تدريب</h3>
             </div>
-            <div onclick="playClickSound(); showAppTab('libraryContainer')" class="card-hover bg-gradient-to-br from-teal-500 to-cyan-700 p-4 rounded-3xl shadow-lg cursor-pointer active:scale-95 transition-transform duration-150 h-40 flex flex-col justify-between text-white relative overflow-hidden" role="button" tabindex="0" aria-label="ملفات دعم و تقوية">
+            <div onclick="playClickSound(); openSupportScreen()" class="card-hover bg-gradient-to-br from-teal-500 to-cyan-700 p-4 rounded-3xl shadow-lg cursor-pointer active:scale-95 transition-transform duration-150 h-40 flex flex-col justify-between text-white relative overflow-hidden" role="button" tabindex="0" aria-label="ملفات دعم و تقوية">
               <div class="absolute top-0 left-0 w-24 h-24 bg-white/10 rounded-full -mt-10 -ml-10"></div>
               <div class="flex justify-between items-start relative z-10">
                 <i class="fas fa-book-open-reader text-3xl opacity-90" aria-hidden="true"></i>
@@ -2155,6 +2316,34 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
       </div>
     </div>
     <div class="p-4 flex-1 overflow-y-auto w-full" id="filesContainer"></div>
+  </div>
+
+  <!-- 🆕 شاشة النماذج الامتحانية -->
+  <div id="trainingScreen" class="fixed inset-0 mx-auto max-w-2xl bg-slate-50 dark:bg-slate-900 z-[50] flex-col w-full pb-24" style="display:none;">
+    <div class="relative bg-gradient-to-br from-indigo-800 via-blue-800 to-blue-900 dark:from-slate-900 dark:to-slate-800 pt-16 pb-12 px-5 rounded-b-[2rem] shadow-xl overflow-hidden w-full">
+      <div id="headerBgLayerTraining" class="absolute inset-0 bg-cover bg-center"></div>
+      <div id="headerBgLayerTrainingOverlay" class="absolute inset-0 bg-gradient-to-br from-indigo-800 via-blue-800 to-blue-900 dark:from-slate-900 dark:to-slate-800"></div>
+      <button onclick="closeTrainingScreen()" class="absolute top-4 right-4 bg-white/20 p-2 rounded-full z-10" aria-label="رجوع"><i class="fas fa-arrow-right text-lg text-white"></i></button>
+      <div class="relative z-10 flex flex-col items-center text-center text-white pt-6">
+        <h1 class="text-2xl font-extrabold">🎓 نماذج امتحانية و تدريب</h1>
+        <p class="text-blue-200 mt-1 font-semibold text-sm">ملفات تدريبية لتحضير البكالوريا</p>
+      </div>
+    </div>
+    <div class="p-4 flex-1 overflow-y-auto w-full" id="trainingContainer"></div>
+  </div>
+
+  <!-- 🆕 شاشة ملفات الدعم والتقوية -->
+  <div id="supportScreen" class="fixed inset-0 mx-auto max-w-2xl bg-slate-50 dark:bg-slate-900 z-[50] flex-col w-full pb-24" style="display:none;">
+    <div class="relative bg-gradient-to-br from-teal-600 via-emerald-700 to-cyan-800 dark:from-slate-900 dark:to-slate-800 pt-16 pb-12 px-5 rounded-b-[2rem] shadow-xl overflow-hidden w-full">
+      <div id="headerBgLayerSupport" class="absolute inset-0 bg-cover bg-center"></div>
+      <div id="headerBgLayerSupportOverlay" class="absolute inset-0 bg-gradient-to-br from-teal-600 via-emerald-700 to-cyan-800 dark:from-slate-900 dark:to-slate-800"></div>
+      <button onclick="closeSupportScreen()" class="absolute top-4 right-4 bg-white/20 p-2 rounded-full z-10" aria-label="رجوع"><i class="fas fa-arrow-right text-lg text-white"></i></button>
+      <div class="relative z-10 flex flex-col items-center text-center text-white pt-6">
+        <h1 class="text-2xl font-extrabold">📚 ملفات دعم و تقوية</h1>
+        <p class="text-emerald-100 mt-1 font-semibold text-sm">أنشطة وملفات مساعدة</p>
+      </div>
+    </div>
+    <div class="p-4 flex-1 overflow-y-auto w-full" id="supportContainer"></div>
   </div>
 
   <div id="viewerScreen" class="fixed inset-0 mx-auto max-w-2xl bg-white dark:bg-slate-900 z-[80] flex-col relative w-full" style="display:none;">
