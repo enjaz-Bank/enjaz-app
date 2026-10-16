@@ -33,6 +33,16 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
   const auth = getAuth(app);
   setPersistence(auth, browserLocalPersistence).catch(e => console.warn('persistence:', e));
 
+  // ✅ توليد كود استرجاع
+  function generateRecoveryCode() {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let code = 'ENJ-';
+    for (let i = 0; i < 4; i++) code += chars[Math.floor(Math.random() * chars.length)];
+    code += '-';
+    for (let i = 0; i < 4; i++) code += chars[Math.floor(Math.random() * chars.length)];
+    return code;
+  }
+
   function getGuestId() {
     let gid = localStorage.getItem('enjaz_guest_id');
     if (!gid) {
@@ -499,6 +509,103 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
   }
   window.clearLibraryCache = clearLibraryCache;
 
+  // ✅ عرض popup كود الاسترجاع
+  window.showRecoveryCodePopup = function(code) {
+    const popup = document.getElementById('recoveryCodeModal');
+    document.getElementById('recoveryCodeValue').innerText = code;
+    popup.classList.remove('hidden');
+    popup.classList.add('flex');
+  };
+  window.copyRecoveryCode = async function() {
+    const code = document.getElementById('recoveryCodeValue').innerText;
+    try {
+      await navigator.clipboard.writeText(code);
+      const btn = event.target.closest('button');
+      const orig = btn.innerHTML;
+      btn.innerHTML = '<i class="fas fa-check"></i> تم النسخ';
+      setTimeout(() => { btn.innerHTML = orig; }, 1500);
+    } catch(e) { alert('الكود: ' + code); }
+  };
+  window.closeRecoveryCodePopup = function() {
+    document.getElementById('recoveryCodeModal').classList.add('hidden');
+    document.getElementById('recoveryCodeModal').classList.remove('flex');
+  };
+
+  // ✅ استرجاع المشتريات من كود
+  window.recoverPurchases = async function() {
+    const input = document.getElementById('recoverCodeInput');
+    const code = input.value.trim().toUpperCase();
+    const errBox = document.getElementById('recoverError');
+    const successBox = document.getElementById('recoverSuccess');
+    
+    if (!code) { errBox.innerText = "أدخل الكود"; errBox.classList.remove('hidden'); return; }
+    if (!currentUser) { errBox.innerText = "خطأ في الجلسة"; errBox.classList.remove('hidden'); return; }
+    
+    errBox.classList.add('hidden');
+    successBox.classList.add('hidden');
+    
+    const btn = document.querySelector('button[onclick="recoverPurchases()"]');
+    if (btn) { btn.disabled = true; btn.innerText = "جاري البحث..."; }
+    
+    try {
+      const codeSnap = await getDoc(doc(db, "recoveryCodes", code));
+      if (!codeSnap.exists()) throw new Error("الكود غير موجود");
+      
+      const codeData = codeSnap.data();
+      const remoteFiles = codeData.purchasedFiles || [];
+      
+      if (remoteFiles.length === 0) throw new Error("لا توجد مشتريات في هذا الكود");
+      
+      // دمج مع المشتريات الحالية
+      const current = currentUserData.purchasedFiles || [];
+      const merged = [...new Set([...current, ...remoteFiles])];
+      
+      await updateDoc(doc(db, "users", currentUser.uid), { purchasedFiles: merged });
+      currentUserData.purchasedFiles = merged;
+      
+      // زيادة عداد الاستخدام
+      try {
+        await updateDoc(doc(db, "recoveryCodes", code), {
+          usedCount: (codeData.usedCount || 0) + 1,
+          lastUsedAt: new Date()
+        });
+      } catch(e) { console.warn('counter update failed:', e.message); }
+      
+      clearLibraryCache();
+      
+      successBox.classList.remove('hidden');
+      successBox.innerText = `✓ تم استرجاع ${remoteFiles.length} ملف بنجاح!`;
+      
+      input.value = '';
+      
+      setTimeout(() => {
+        document.getElementById('recoverModal').classList.add('hidden');
+        document.getElementById('recoverModal').classList.remove('flex');
+        successBox.classList.add('hidden');
+        loadLibrary();
+        showAppTab('libraryContainer');
+      }, 2000);
+      
+    } catch(e) {
+      errBox.innerText = e.message || "فشل الاسترجاع";
+      errBox.classList.remove('hidden');
+    } finally {
+      if (btn) { btn.disabled = false; btn.innerText = "استرجاع"; }
+    }
+  };
+  
+  window.openRecoverModal = function() {
+    document.getElementById('recoverCodeInput').value = '';
+    document.getElementById('recoverError').classList.add('hidden');
+    document.getElementById('recoverSuccess').classList.add('hidden');
+    document.getElementById('recoverModal').classList.remove('hidden');
+    document.getElementById('recoverModal').classList.add('flex');
+  };
+  window.closeRecoverModal = function() {
+    document.getElementById('recoverModal').classList.add('hidden');
+    document.getElementById('recoverModal').classList.remove('flex');
+  };
+
   function showSuccessPopup(title, msg, callback, delay = 1800) {
     const popup = document.getElementById('successPopup');
     const inner = document.getElementById('successPopupInner');
@@ -618,7 +725,7 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
         if (cartFileIds.length === 0) throw new Error("السلة فارغة");
         
         // ✅ المرحلة 2.3: دائماً احفظ في Firestore (سواء زائر أو مسجل)
-                if (currentUser) {
+        if (currentUser) {
           const userRef = doc(db, "users", currentUser.uid);
           const freshSnap = await getDoc(userRef);
           const freshData = freshSnap.exists() ? freshSnap.data() : {};
@@ -639,6 +746,31 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
         cart = []; saveCart(); updateCartBadge();
         clearLibraryCache();
         
+        // ✅ توليد كود استرجاع للزوار (بعد أول شراء فقط)
+        if (currentUser && currentUser.isAnonymous && !currentUserData.recoveryCode) {
+          try {
+            const newCode = generateRecoveryCode();
+            await updateDoc(doc(db, "users", currentUser.uid), { recoveryCode: newCode });
+            await setDoc(doc(db, "recoveryCodes", newCode), {
+              uid: currentUser.uid,
+              purchasedFiles: currentUserData.purchasedFiles || [],
+              createdAt: new Date(),
+              usedCount: 0
+            });
+            currentUserData.recoveryCode = newCode;
+            console.log('🔑 كود الاسترجاع:', newCode);
+          } catch(e) {
+            console.warn('⚠️ فشل توليد كود الاسترجاع:', e.message);
+          }
+        } else if (currentUser && currentUser.isAnonymous && currentUserData.recoveryCode) {
+          // مزامنة المشتريات مع وثيقة الكود
+          try {
+            await updateDoc(doc(db, "recoveryCodes", currentUserData.recoveryCode), {
+              purchasedFiles: currentUserData.purchasedFiles || []
+            });
+          } catch(e) { console.warn('sync failed:', e.message); }
+        }
+        
         const modalC = document.getElementById('premiumModal');
         modalC.classList.add('hidden');
         modalC.classList.remove('flex');
@@ -647,11 +779,16 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
           navLevel = Math.max(0, navLevel - 1);
         }
         
+        const codeToShow = (currentUser && currentUser.isAnonymous) ? currentUserData.recoveryCode : null;
         showSuccessPopup('🎉 تم تفعيل الكود!', 'جميع ملفاتك أصبحت متاحة في مكتبتك', () => {
           while(navLevel > 0) { const st = appStack.pop(); navLevel--; applyCloseForState(st); }
           navLevel = 0;
           try { history.replaceState({ level: 0 }, ''); } catch(e) {}
           showAppTab('libraryContainer');
+          // ✅ عرض كود الاسترجاع للزوار
+          if (codeToShow) {
+            setTimeout(() => window.showRecoveryCodePopup(codeToShow), 500);
+          }
         });
         return;
       }
@@ -805,9 +942,14 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
       </div>`;
     }
 
-    // ✅ المرحلة 2.3: الزوار المجهولون يقرأون مشترياتهم من Firestore
+    // ✅ المرحلة 2.3: الزوار المجهولون يقرؤون مشترياتهم من Firestore
     if (currentUser && currentUser.isAnonymous) {
       const purchasedFiles = currentUserData?.purchasedFiles || [];
+      
+      // ✅ زر استرجاع (يظهر دائماً للزوار)
+      html += `<button onclick="openRecoverModal()" class="w-full bg-gradient-to-l from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600 text-white py-3 rounded-xl font-bold text-sm shadow-md active:scale-95 transition-transform mb-4 flex items-center justify-center gap-2">
+        <i class="fas fa-key"></i> استرجاع مشتريات من جهاز آخر
+      </button>`;
       
       if (purchasedFiles.length === 0) {
         c.innerHTML = `<div class="text-center mt-20 text-gray-400"><i class="fas fa-book-bookmark text-5xl mb-4 block"></i><p>لا توجد مشتريات. يمكنك الشراء المباشر من السلة بدون تسجيل دخول.</p></div>`;
@@ -1500,7 +1642,6 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
             console.log('📦 [Anonymous] بيانات موجودة:', currentUserData.purchasedFiles?.length || 0, 'ملف');
           } else {
             // زائر جديد — إنشاء وثيقة
-                       // زائر جديد — إنشاء وثيقة
             currentUserData = {
               email: null,
               name: '',
@@ -1725,6 +1866,45 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
       <div class="w-full bg-gray-200 dark:bg-slate-700 rounded-full h-1.5 overflow-hidden">
         <div id="successPopupProgress" class="bg-gradient-to-r from-emerald-400 to-emerald-600 h-full rounded-full transition-all duration-[1800ms]" style="width: 0%"></div>
       </div>
+    </div>
+  </div>
+
+  <div id="recoveryCodeModal" class="fixed inset-0 z-[96] bg-black/70 hidden justify-center items-center p-4 backdrop-blur-sm">
+    <div class="bg-white dark:bg-slate-800 rounded-3xl p-6 max-w-sm w-full text-center shadow-2xl">
+      <div class="w-16 h-16 mx-auto bg-gradient-to-br from-purple-400 to-indigo-600 rounded-full flex items-center justify-center mb-4 shadow-lg">
+        <i class="fas fa-key text-3xl text-white"></i>
+      </div>
+      <h3 class="text-xl font-extrabold text-gray-800 dark:text-white mb-2">🔑 احفظ كود الاسترجاع</h3>
+      <p class="text-sm text-gray-500 dark:text-gray-400 mb-4 leading-relaxed">
+        استخدم هذا الكود لاسترجاع مشترياتك من أي جهاز آخر.
+      </p>
+      <div class="bg-gradient-to-r from-purple-50 to-indigo-50 dark:from-slate-900 dark:to-slate-900 border-2 border-purple-200 dark:border-indigo-700 rounded-2xl p-4 mb-4">
+        <div id="recoveryCodeValue" class="text-2xl font-extrabold tracking-widest text-indigo-700 dark:text-indigo-300 mb-3 font-mono">ENJ-XXXX-XXXX</div>
+        <button onclick="copyRecoveryCode()" class="bg-gradient-to-l from-purple-500 to-indigo-500 text-white px-4 py-2 rounded-xl font-bold text-sm active:scale-95 transition-transform">
+          <i class="fas fa-copy"></i> نسخ الكود
+        </button>
+      </div>
+      <div class="text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-xl p-3 mb-4">
+        💡 احفظ الكود في مكان آمن. يمكنك استخدامه أكثر من مرة.
+      </div>
+      <button onclick="closeRecoveryCodePopup()" class="w-full bg-gray-100 dark:bg-slate-700 text-gray-700 dark:text-gray-200 p-3 rounded-xl font-bold text-sm">حسناً، فهمت</button>
+    </div>
+  </div>
+
+  <div id="recoverModal" class="fixed inset-0 z-[96] bg-black/60 hidden justify-center items-center p-4 backdrop-blur-sm">
+    <div class="bg-white dark:bg-slate-800 rounded-3xl p-6 max-w-sm w-full text-center shadow-2xl">
+      <div class="w-16 h-16 mx-auto bg-gradient-to-br from-emerald-400 to-teal-600 rounded-full flex items-center justify-center mb-4 shadow-lg">
+        <i class="fas fa-undo text-3xl text-white"></i>
+      </div>
+      <h3 class="text-xl font-extrabold text-gray-800 dark:text-white mb-2">استرجاع المشتريات</h3>
+      <p class="text-sm text-gray-500 dark:text-gray-400 mb-4 leading-relaxed">
+        أدخل كود الاسترجاع الذي حصلت عليه عند الشراء من الجهاز الآخر.
+      </p>
+      <div id="recoverError" class="hidden bg-red-100 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm p-2 rounded-lg mb-3"></div>
+      <div id="recoverSuccess" class="hidden bg-green-100 dark:bg-green-900/20 text-green-600 dark:text-green-400 text-sm p-2 rounded-lg mb-3"></div>
+      <input id="recoverCodeInput" type="text" placeholder="ENJ-XXXX-XXXX" class="w-full p-3 mb-4 text-center bg-gray-100 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl focus:outline-none focus:border-indigo-500 font-mono tracking-widest uppercase" autocomplete="off">
+      <button onclick="recoverPurchases()" class="w-full bg-gradient-to-l from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white p-3 rounded-xl font-bold mb-3">استرجاع</button>
+      <button onclick="closeRecoverModal()" class="w-full text-gray-400 hover:text-gray-600 text-sm py-2">إلغاء</button>
     </div>
   </div>
 
