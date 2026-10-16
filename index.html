@@ -77,7 +77,6 @@
   let appCurrency = 'ل.س';
   let userAccessCache = { hasFullPackage: false, subjects: new Set(), extraFileIds: new Set(), packagesSettingsCache: {} };
 
-  // 🆕 متغيرات الشاشتين الجديدتين
   let currentExtraFiles = [];
   let activeExtraCategory = null;
   let activeExtraFilesUnsub = null;
@@ -104,7 +103,6 @@
 
   window.setTopBarVisible = function(v) { /* no-op */ };
 
-  // ============ 🆕 دوال موحدة لجلب الملفات ============
   async function getFileById(fileId) {
     let snap = await getDoc(doc(db, "files", fileId));
     if (!snap.exists()) snap = await getDoc(doc(db, "extraFiles", fileId));
@@ -768,7 +766,6 @@
     errBox.classList.add('hidden'); successBox.classList.add('hidden');
 
     try {
-      // ✅ دعم الأكواد القديمة والجديدة
       let codeRef = doc(db, "codes", codeInput);
       let codeSnap = await getDoc(codeRef);
       if (!codeSnap.exists()) {
@@ -782,6 +779,24 @@
       const codeData = codeSnap.data();
       if (codeData.isUsed === true) throw new Error("الكود مستخدم بالفعل");
       if (codeData.isDisabled === true) throw new Error("هذا الكود معطّل");
+
+      // ✅ تأكيد الشراء قبل استهلاك الكود
+      if (codeData.type === 'cart') {
+        if (cart.length === 0) throw new Error("السلة فارغة");
+        const totalPrice = cart.reduce((s, f) => s + Number(f.price || 0), 0);
+        const totalDisplay = totalPrice > 0 ? `${totalPrice} ${appCurrency}` : 'مجاني';
+        const confirmMsg = `📦 سيتم تفعيل ${cart.length} ملف من سلتك\n💰 الإجمالي: ${totalDisplay}\n\n⚠️ لن يمكن التراجع بعد التفعيل\n\nهل تريد المتابعة؟`;
+        if (!confirm(confirmMsg)) {
+          if (btn) { btn.disabled = false; btn.innerText = "تفعيل"; }
+          return;
+        }
+      } else if (codeData.type === 'package') {
+        const confirmMsg = `👑 سيتم تفعيل الباقة:\n"${codeData.targetName || ''}"\n\n⚠️ لن يمكن التراجع بعد التفعيل\n\nهل تريد المتابعة؟`;
+        if (!confirm(confirmMsg)) {
+          if (btn) { btn.disabled = false; btn.innerText = "تفعيل"; }
+          return;
+        }
+      }
 
       try {
         await updateDoc(codeRef, { 
@@ -797,7 +812,6 @@
       codeInputEl.value = '';
       if (codeData.type === 'cart') {
         const cartFileIds = cart.map(f => f.id);
-        if (cartFileIds.length === 0) throw new Error("السلة فارغة");
         
         if (currentUser) {
           const userRef = doc(db, "users", currentUser.uid);
@@ -960,7 +974,6 @@
     </div>`;
   }
 
-  // ✅ محدّث: يبحث في files ثم extraFiles
   window.downloadLibraryFile = async function(fileId) {
     playClickSound();
     try {
@@ -1015,9 +1028,16 @@
     if (currentUser && currentUser.isAnonymous) {
       const purchasedFiles = currentUserData?.purchasedFiles || [];
       
-      html += `<button onclick="openRecoverModal()" class="w-full bg-gradient-to-l from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600 text-white py-3 rounded-xl font-bold text-sm shadow-md active:scale-95 transition-transform mb-4 flex items-center justify-center gap-2">
+      html += `<button onclick="openRecoverModal()" class="w-full bg-gradient-to-l from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600 text-white py-3 rounded-xl font-bold text-sm shadow-md active:scale-95 transition-transform mb-3 flex items-center justify-center gap-2">
         <i class="fas fa-key"></i> استرجاع مشتريات من جهاز آخر
       </button>`;
+
+      // ✅ جديد: زر عرض كود الاسترجاع (يظهر فقط لمن لديه كود)
+      if (currentUserData?.recoveryCode) {
+        html += `<button onclick="window.showRecoveryCodePopup('${currentUserData.recoveryCode}')" class="w-full bg-gradient-to-l from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white py-3 rounded-xl font-bold text-sm shadow-md active:scale-95 transition-transform mb-4 flex items-center justify-center gap-2">
+          <i class="fas fa-eye"></i> عرض كود الاسترجاع الخاص بي
+        </button>`;
+      }
       
       if (purchasedFiles.length === 0) {
         html += `<div class="text-center mt-10 text-gray-400">
@@ -1055,7 +1075,6 @@
         </div>
       </div>`;
 
-      // ✅ محدّث: جلب من files + extraFiles
       const guestFiles = await fetchFilesFromAnyCollection(purchasedFiles);
       
       if (guestFiles.length > 0) {
@@ -1145,7 +1164,6 @@
     }
 
     if (allExtraFileIds.size > 0) {
-      // ✅ محدّث: يستخدم الدالة الموحدة
       const extraFiles = await fetchFilesFromAnyCollection(Array.from(allExtraFileIds));
       
       if (extraFiles.length > 0) {
@@ -1160,7 +1178,6 @@
     const individualPurchases = purchasedFiles.filter(fid => !allExtraFileIds.has(fid));
     
     if (individualPurchases.length > 0) {
-      // ✅ محدّث: جلب من files + extraFiles
       const individualFiles = await fetchFilesFromAnyCollection(individualPurchases);
       
       if (individualFiles.length > 0) {
@@ -1193,7 +1210,6 @@
     }
   }
 
-  // ✅ محدّث: يبحث في files ثم extraFiles
   window.openLibraryFile = async function(fileId) {
     playClickSound();
     const docSnap = await getFileById(fileId);
@@ -1647,7 +1663,6 @@
     } catch(e) { alert("تعذر فتح نافذة الطباعة."); overlay.classList.add('hidden'); overlay.classList.remove('flex'); }
   };
 
-  // ============ شاشتا النماذج والدعم ============
   function loadExtraFilesScreen(category) {
     const containerId = category === 'training' ? 'trainingContainer' : 'supportContainer';
     const container = document.getElementById(containerId);
