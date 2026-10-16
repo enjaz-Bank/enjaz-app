@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
 <title>منصة إنجاز الأكاديمية</title>
 
-<meta http-equiv="Content-Security-Policy" content="default-src * 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https:; frame-src * 'self' https: data: blob:; img-src * 'self' data: blob: https:; media-src * 'self' data: blob: https:">
+<meta http-equiv="Content-Security-Policy" content="default-src * 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https:; frame-src * 'self' https: data: blob:; img-src * 'self' data: blob: https:; media-src * 'self' data: blob: https:; connect-src * https: wss:;">
 
 <script src="https://cdn.tailwindcss.com"></script>
 <script> tailwind.config = { darkMode: 'class' } </script>
@@ -15,8 +15,8 @@
 
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
-  import { getFirestore, collection, onSnapshot, doc, getDoc, query, where, setDoc, updateDoc, getDocs, deleteDoc, arrayUnion, arrayRemove, documentId } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
-  import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js";
+  import { getFirestore, collection, onSnapshot, doc, getDoc, query, where, setDoc, updateDoc, getDocs, deleteDoc, documentId } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
+import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence, signInAnonymously } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js";
 
   const firebaseConfig = {
     apiKey: "AIzaSyAex1r9HHheqUgmjz6tbyLuob3yA4JXGfk",
@@ -31,13 +31,30 @@
   const app = initializeApp(firebaseConfig);
   const db = getFirestore(app);
   const auth = getAuth(app);
+  setPersistence(auth, browserLocalPersistence).catch(e => console.warn('persistence:', e));
+
+  function getGuestId() {
+    let gid = localStorage.getItem('enjaz_guest_id');
+    if (!gid) {
+      gid = 'guest_' + Date.now() + '_' + Math.random().toString(36).substring(2, 10);
+      localStorage.setItem('enjaz_guest_id', gid);
+    }
+    return gid;
+  }
+
+  function normalizeSubject(s) {
+    return (s || '').toString().trim().replace(/\s+/g, ' ')
+      .replace(/[إأآا]/g, 'ا').replace(/ى/g, 'ي').replace(/ة/g, 'ه');
+  }
+  window.normalizeSubject = normalizeSubject;
 
   let currentUser = null;
   let currentUserData = null;
   let lessonsData = [];
   let currentView = "grid";
   let bookmarks = [];
-  let cart = []; 
+  let cart = [];
+  let guestPurchases = [];
   let currentLessonFiles = [];
   let currentViewingFile = null;
   let activeListeners = { lessons: null, files: null, ads: null, exams: null, slider: null, bookmarks: null };
@@ -48,11 +65,13 @@
   let searchTimeout;
   let audioCtx = null;
   let stateRestored = false;
-  
   let appCurrency = 'ل.س';
+  let userAccessCache = { hasFullPackage: false, subjects: new Set(), extraFileIds: new Set(), packagesSettingsCache: {} };
 
   const CACHE_KEY_LESSONS = 'enjaz_lessons_cache_v6';
   const CACHE_KEY_CART = 'enjaz_cart_cache';
+  const CACHE_KEY_GUEST = 'enjaz_guest_purchases';
+  const CACHE_KEY_LIBRARY = 'enjaz_library_cache_v1';
 
   const fixedSubjects = [
     { name: "رياضيات", color: "from-purple-500 to-purple-700", icon: "fa-square-root-variable" },
@@ -66,7 +85,50 @@
   ];
 
   let navLevel = 0;
-  const appStack = [];
+  let appStack = [];
+
+  window.setTopBarVisible = function(v) { /* no-op */ };
+
+  async function rebuildUserAccessCache() {
+    userAccessCache = { hasFullPackage: false, subjects: new Set(), extraFileIds: new Set(), packagesSettingsCache: {} };
+    if (!currentUser || !currentUserData) return;
+    try {
+      const pkgSnap = await getDoc(doc(db, "settings", "packages"));
+      const packages = pkgSnap.exists() ? pkgSnap.data() : {};
+      userAccessCache.packagesSettingsCache = packages;
+      const owned = Array.isArray(currentUserData.ownedPackages) ? currentUserData.ownedPackages : [];
+      if (owned.length > 0) {
+        owned.forEach(entry => {
+          const pkg = packages[entry.id];
+          if (!pkg) return;
+          if (pkg.isFull) userAccessCache.hasFullPackage = true;
+          else {
+            (pkg.subjects || []).forEach(s => userAccessCache.subjects.add(normalizeSubject(s)));
+            (pkg.extraFiles || []).forEach(id => userAccessCache.extraFileIds.add(id));
+          }
+        });
+      } else {
+        (currentUserData.activePackages || []).forEach(id => {
+          const pkg = packages[id];
+          if (pkg?.isFull || id === 'pkg1') userAccessCache.hasFullPackage = true;
+        });
+        (currentUserData.activePackageSubjects || []).forEach(s => userAccessCache.subjects.add(normalizeSubject(s)));
+      }
+    } catch(e) { console.warn('rebuildUserAccessCache error:', e); }
+  }
+  window.rebuildUserAccessCache = rebuildUserAccessCache;
+
+  function canAccessFile(f) {
+    if (!f) return false;
+    if (guestPurchases.includes(f.id)) return true;
+    if (!currentUser) return false;
+    const hasFullPackage = userAccessCache.hasFullPackage;
+    const hasSubjectPackage = userAccessCache.subjects.has(normalizeSubject(f.subject));
+    const hasExtraFile = userAccessCache.extraFileIds.has(f.id);
+    const hasFile = (currentUserData?.purchasedFiles || []).includes(f.id);
+    return hasFullPackage || hasSubjectPackage || hasExtraFile || hasFile;
+  }
+  window.canAccessFile = canAccessFile;
 
   function pushScreen(name, data) { 
     navLevel++; 
@@ -74,7 +136,7 @@
     try { 
       sessionStorage.setItem('enjaz_app_stack', JSON.stringify(appStack));
       sessionStorage.setItem('enjaz_active_tab', document.querySelector('.app-tab:not(.hidden)')?.id || 'lessonsContainer');
-      history.pushState({ level: navLevel }, ''); 
+      history.pushState({ level: navLevel, enjazScreen: name }, ''); 
     } catch (e) {} 
   }
   function requestBack() { if (navLevel > 0) { try { history.back(); } catch (e) {} } }
@@ -87,46 +149,38 @@
         document.getElementById('lessonFilesScreen').style.display = 'flex';
         document.getElementById('viewerFrame').srcdoc = '';
         document.getElementById('viewerFrame').src = 'about:blank';
-        loadLibrary(); 
-        break;
+        loadLibrary(); break;
       case 'lessonFiles':
         document.getElementById('lessonFilesScreen').style.display = 'none';
         document.getElementById('appFrame').style.display = 'block';
-        if (activeListeners.files) { activeListeners.files(); activeListeners.files = null; }
-        break;
+        if (activeListeners.files) { activeListeners.files(); activeListeners.files = null; } break;
       case 'packagesScreen':
         document.getElementById('packagesScreen').style.display = 'none';
-        document.getElementById('appFrame').style.display = 'block';
-        break;
+        document.getElementById('appFrame').style.display = 'block'; break;
       case 'cartScreen':
         document.getElementById('cartScreen').style.display = 'none';
-        document.getElementById('appFrame').style.display = 'block';
-        break;
+        document.getElementById('appFrame').style.display = 'block'; break;
       case 'subjectList':
         document.getElementById('listView').style.display = 'none';
         document.getElementById('gridView').style.display = 'block';
-        currentView = 'grid';
-        break;
+        currentView = 'grid'; break;
       case 'singleBuyModal':
         document.getElementById('singleBuyModal').classList.add('hidden');
-        document.getElementById('singleBuyModal').classList.remove('flex');
-        break;
+        document.getElementById('singleBuyModal').classList.remove('flex'); break;
       case 'premiumModal':
         document.getElementById('premiumModal').classList.add('hidden');
-        document.getElementById('premiumModal').classList.remove('flex');
-        break;
+        document.getElementById('premiumModal').classList.remove('flex'); break;
       case 'socialMenu':
         document.getElementById('socialMenu').classList.add('hidden');
-        document.getElementById('contactSubMenu').classList.add('hidden');
-        break;
+        document.getElementById('contactSubMenu').classList.add('hidden'); break;
       case 'authScreen':
         document.getElementById('authScreen').classList.add('hidden');
-        document.getElementById('authScreen').classList.remove('flex');
-        break;
+        document.getElementById('authScreen').classList.remove('flex'); break;
     }
   }
 
   window.addEventListener('popstate', function (e) {
+    if (e.state && e.state.enjazIgnore) return;
     const target = (e.state && typeof e.state.level === 'number') ? e.state.level : 0;
     while (navLevel > target) { 
       const st = appStack.pop(); 
@@ -139,8 +193,16 @@
   document.addEventListener('click', function(e) {
     const menu = document.getElementById('socialMenu');
     const btn = document.getElementById('menuBtn');
-    if (menu && !menu.contains(e.target) && btn && !btn.contains(e.target) && !menu.classList.contains('hidden')) {
-      requestBack();
+    if (!menu || menu.classList.contains('hidden')) return;
+    if (e.target.closest && e.target.closest('#authScreen')) return;
+    if (menu.contains(e.target) || (btn && btn.contains(e.target))) return;
+    menu.classList.add('hidden');
+    const csm = document.getElementById('contactSubMenu');
+    if (csm) csm.classList.add('hidden');
+    if (appStack.length > 0 && appStack[appStack.length - 1].name === 'socialMenu') {
+      appStack.pop();
+      navLevel = Math.max(0, navLevel - 1);
+      try { sessionStorage.setItem('enjaz_app_stack', JSON.stringify(appStack)); } catch(err) {}
     }
   });
 
@@ -148,26 +210,25 @@
     if (sessionStorage.getItem('enjaz_muted') === 'true') return;
     try {
       audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      const now = audioCtx.currentTime;
       const osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
       const filter = audioCtx.createBiquadFilter();
-      
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(1100, now);
+      filter.Q.value = 0.7;
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(660, now);
+      osc.frequency.exponentialRampToValueAtTime(520, now + 0.08);
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(0.04, now + 0.008);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.14);
       osc.connect(filter);
       filter.connect(gain);
       gain.connect(audioCtx.destination);
-      
-      filter.type = 'lowpass';
-      filter.frequency.value = 1000;
-      
-      osc.frequency.setValueAtTime(300, audioCtx.currentTime);
-      osc.frequency.exponentialRampToValueAtTime(150, audioCtx.currentTime + 0.05);
-      osc.type = 'sine';
-      
-      gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.1);
-      
-      osc.start(audioCtx.currentTime);
-      osc.stop(audioCtx.currentTime + 0.1);
+      osc.start(now);
+      osc.stop(now + 0.15);
     } catch(e) {}
   };
 
@@ -175,7 +236,6 @@
     const isMuted = sessionStorage.getItem('enjaz_muted') === 'true';
     const newMuted = !isMuted;
     sessionStorage.setItem('enjaz_muted', newMuted);
-    
     const icon = document.getElementById('soundIcon');
     const text = document.getElementById('soundText');
     if (newMuted) {
@@ -216,38 +276,97 @@
   };
 
   window.toggleMenu = function(e) { 
-    if(e) e.stopPropagation();
+    if(e) { e.stopPropagation(); e.preventDefault(); }
     playClickSound(); 
     const menu = document.getElementById('socialMenu'); 
     if (menu.classList.contains('hidden')) { 
       menu.classList.remove('hidden'); 
       pushScreen('socialMenu'); 
     } else { 
-      requestBack(); 
+      menu.classList.add('hidden');
+      document.getElementById('contactSubMenu')?.classList.add('hidden');
+      if (appStack.length > 0 && appStack[appStack.length - 1].name === 'socialMenu') {
+        appStack.pop();
+        navLevel = Math.max(0, navLevel - 1);
+        try { sessionStorage.setItem('enjaz_app_stack', JSON.stringify(appStack)); } catch(err) {}
+      }
     } 
   };
-  
-  window.openPackagesScreen = function(skipPush = false) { playClickSound(); document.getElementById('packagesScreen').style.display = 'flex'; document.getElementById('appFrame').style.display = 'none'; if(!skipPush) pushScreen('packagesScreen'); loadPackages(); }
+
+  window.openPackagesScreen = function(skipPush = false) { 
+    if (typeof skipPush !== 'boolean') skipPush = false;
+    playClickSound(); 
+    document.getElementById('packagesScreen').style.display = 'flex'; 
+    document.getElementById('appFrame').style.display = 'none'; 
+    if(!skipPush) pushScreen('packagesScreen'); 
+    loadPackages(); 
+  }
   window.closePackagesScreen = function() { requestBack(); }
 
-  window.openCartScreen = function(skipPush = false) { playClickSound(); document.getElementById('cartScreen').style.display = 'flex'; document.getElementById('appFrame').style.display = 'none'; if(!skipPush) pushScreen('cartScreen'); renderCart(); }
+  window.openCartScreen = function(skipPush = false) { 
+    if (typeof skipPush !== 'boolean') skipPush = false;
+    playClickSound(); 
+    document.getElementById('cartScreen').style.display = 'flex'; 
+    document.getElementById('appFrame').style.display = 'none'; 
+    if(!skipPush) pushScreen('cartScreen'); 
+    renderCart(); 
+  }
   window.closeCartScreen = function() { requestBack(); }
 
   window.showPremiumModal = function() { 
     playClickSound();
-    if (!currentUser) { openAuthScreen(); return; } 
-    document.getElementById('premiumModal').classList.remove('hidden'); document.getElementById('premiumModal').classList.add('flex'); pushScreen('premiumModal'); 
+    document.getElementById('premiumModal').classList.remove('hidden'); 
+    document.getElementById('premiumModal').classList.add('flex'); 
+    pushScreen('premiumModal'); 
   };
   window.closePremiumModal = function() { requestBack(); };
 
   window.openSingleBuyModal = function() { 
     playClickSound();
-    if (!currentUser) { openAuthScreen(); return; } 
-    document.getElementById('singleBuyModal').classList.remove('hidden'); document.getElementById('singleBuyModal').classList.add('flex'); pushScreen('singleBuyModal'); 
+    document.getElementById('singleBuyModal').classList.remove('hidden'); 
+    document.getElementById('singleBuyModal').classList.add('flex'); 
+    pushScreen('singleBuyModal'); 
   }
   window.closeSingleBuyModal = function() { requestBack(); }
 
-  window.openAuthScreen = function(skipPush = false) { playClickSound(); document.getElementById('authScreen').classList.remove('hidden'); document.getElementById('authScreen').classList.add('flex'); document.getElementById('authError').classList.add('hidden'); if(!skipPush) pushScreen('authScreen'); }
+  window.goToPackagesFromSingleBuy = function() {
+    playClickSound();
+    const m = document.getElementById('singleBuyModal');
+    m.classList.add('hidden');
+    m.classList.remove('flex');
+    if (appStack.length > 0 && appStack[appStack.length - 1].name === 'singleBuyModal') {
+      appStack.pop();
+      navLevel = Math.max(0, navLevel - 1);
+    }
+    document.getElementById('packagesScreen').style.display = 'flex';
+    document.getElementById('appFrame').style.display = 'none';
+    pushScreen('packagesScreen');
+    loadPackages();
+  };
+
+  window.openAuthScreen = function(skipPush = false) { 
+    if (typeof skipPush !== 'boolean') skipPush = false;
+    playClickSound(); 
+    
+    const menu = document.getElementById('socialMenu');
+    if (menu && !menu.classList.contains('hidden')) {
+      menu.classList.add('hidden');
+      document.getElementById('contactSubMenu')?.classList.add('hidden');
+      if (appStack.length > 0 && appStack[appStack.length - 1].name === 'socialMenu') {
+        appStack.pop();
+        navLevel = Math.max(0, navLevel - 1);
+      }
+    }
+    
+    const screen = document.getElementById('authScreen');
+    const alreadyOpen = !screen.classList.contains('hidden');
+    
+    screen.classList.remove('hidden'); 
+    screen.classList.add('flex'); 
+    document.getElementById('authError').classList.add('hidden'); 
+    
+    if(!alreadyOpen && !skipPush) pushScreen('authScreen'); 
+  }
   window.closeAuthScreen = function() { requestBack(); }
 
   window.togglePasswordVisibility = function() {
@@ -258,26 +377,94 @@
   }
 
   window.handleAuth = async function() {
-    const email = document.getElementById('authEmail').value;
+    const email = document.getElementById('authEmail').value.trim();
     const pass = document.getElementById('authPass').value;
+    const name = (document.getElementById('authName')?.value || '').trim();
     const isLogin = document.getElementById('authModeLogin').checked;
     const btn = document.getElementById('authBtn');
     const errBox = document.getElementById('authError');
-    if(!email || !pass) { errBox.innerText = "الرجاء إدخال البريد وكلمة المرور"; errBox.classList.remove('hidden'); return; }
-    btn.disabled = true; btn.innerText = "جاري المعالجة...";
+    
+    if(!email || !pass) { 
+      errBox.innerText = "الرجاء إدخال البريد وكلمة المرور"; 
+      errBox.classList.remove('hidden'); 
+      return; 
+    }
+    if (!isLogin && !name) {
+      errBox.innerText = "الرجاء إدخال الاسم الكامل"; 
+      errBox.classList.remove('hidden'); 
+      return; 
+    }
+    
+    btn.disabled = true; 
+    btn.innerText = "جاري المعالجة...";
+    errBox.classList.add('hidden');
+
+    const timeoutId = setTimeout(() => {
+      btn.disabled = false;
+      btn.innerText = isLogin ? "تسجيل الدخول" : "إنشاء حساب جديد";
+      errBox.innerText = "انتهت المهلة، تحقق من اتصالك بالإنترنت";
+      errBox.classList.remove('hidden');
+    }, 30000);
+    
     try {
-      if(isLogin) { await signInWithEmailAndPassword(auth, email, pass); }
-      else {
+      if(isLogin) { 
+        await signInWithEmailAndPassword(auth, email, pass);
+      } else {
         const cred = await createUserWithEmailAndPassword(auth, email, pass);
-        await setDoc(doc(db, "users", cred.user.uid), { email: email, activePackages: [], activePackageSubjects: [], purchasedFiles: [], createdAt: new Date() });
+        try {
+          await setDoc(doc(db, "users", cred.user.uid), { 
+            email: email, 
+            name: name,
+            activePackages: [], 
+            activePackageSubjects: [], 
+            purchasedFiles: [], 
+            ownedPackages: [],
+            createdAt: new Date() 
+          });
+        } catch(setErr) { console.warn('setDoc on register:', setErr.message); }
       }
+      
+      clearTimeout(timeoutId);
+      
+      errBox.classList.remove('hidden');
+      errBox.classList.remove('bg-red-500/20', 'border-red-400', 'text-red-200');
+      errBox.classList.add('bg-green-500/20', 'border-green-400', 'text-green-200');
+      errBox.innerText = isLogin ? "✓ تم تسجيل الدخول بنجاح!" : "✓ تم إنشاء حسابك بنجاح!";
+      
       document.getElementById('authEmail').value = '';
       document.getElementById('authPass').value = '';
-      closeAuthScreen();
+      const nameEl = document.getElementById('authName');
+      if (nameEl) nameEl.value = '';
+      
+      setTimeout(() => {
+        errBox.classList.add('hidden');
+        errBox.classList.remove('bg-green-500/20', 'border-green-400', 'text-green-200');
+        errBox.classList.add('bg-red-500/20', 'border-red-400', 'text-red-200');
+        
+        const el = document.getElementById('authScreen');
+        el.classList.add('hidden');
+        el.classList.remove('flex');
+        
+        while (appStack.length > 0) {
+          const st = appStack.pop();
+          applyCloseForState(st);
+          navLevel--;
+        }
+        navLevel = 0;
+        try { history.replaceState({ level: 0 }, ''); } catch(e) {}
+        
+        window.showAppTab('lessonsContainer');
+        
+        btn.disabled = false;
+        btn.innerText = isLogin ? "تسجيل الدخول" : "إنشاء حساب جديد";
+      }, 1500);
+      
     } catch(e) {
-      errBox.innerText = e.message.replace('Firebase:', '').trim();
+      clearTimeout(timeoutId);
+      errBox.innerText = (e.message || '').replace('Firebase:', '').trim() || "حدث خطأ";
       errBox.classList.remove('hidden');
-      btn.disabled = false; btn.innerText = isLogin ? "تسجيل الدخول" : "إنشاء حساب جديد";
+      btn.disabled = false; 
+      btn.innerText = isLogin ? "تسجيل الدخول" : "إنشاء حساب جديد";
     }
   }
 
@@ -287,13 +474,59 @@
     document.getElementById('authBtn').innerText = isLogin ? "تسجيل الدخول" : "إنشاء حساب جديد";
     document.getElementById('authToggleText').innerText = isLogin ? "ليس لديك حساب؟ إنشاء حساب" : "لديك حساب بالفعل؟ تسجيل الدخول";
     document.getElementById('authError').classList.add('hidden');
+    const nameWrapper = document.getElementById('authNameWrapper');
+    if (nameWrapper) nameWrapper.classList.toggle('hidden', isLogin);
   }
 
-  function saveCart() { try { localStorage.setItem(CACHE_KEY_CART, JSON.stringify(cart)); } catch(e) {} }
-  function loadCart() {
-    try { const saved = localStorage.getItem(CACHE_KEY_CART); if (saved) cart = JSON.parse(saved); } catch(e) {}
-    updateCartBadge();
+    // ✅ المرحلة 1: السلة في sessionStorage (تُمسح عند إغلاق المتصفح)
+  function saveCart() { 
+    try { sessionStorage.setItem(CACHE_KEY_CART, JSON.stringify(cart)); } catch(e) {} 
   }
+  function loadCart() { 
+    try { 
+      // تنظيف النسخة القديمة من localStorage (إن وُجدت)
+      localStorage.removeItem(CACHE_KEY_CART);
+      const s = sessionStorage.getItem(CACHE_KEY_CART); 
+      if (s) cart = JSON.parse(s); 
+    } catch(e) {} 
+    updateCartBadge(); 
+  }
+  function saveGuestPurchases() { try { localStorage.setItem(CACHE_KEY_GUEST, JSON.stringify(guestPurchases)); } catch(e) {} }
+  function loadGuestPurchases() { try { const s = localStorage.getItem(CACHE_KEY_GUEST); if (s) guestPurchases = JSON.parse(s) || []; } catch(e) {} }
+
+  function clearLibraryCache() {
+    try { sessionStorage.removeItem(CACHE_KEY_LIBRARY); } catch(e) {}
+  }
+  window.clearLibraryCache = clearLibraryCache;
+
+  function showSuccessPopup(title, msg, callback, delay = 1800) {
+    const popup = document.getElementById('successPopup');
+    const inner = document.getElementById('successPopupInner');
+    const progress = document.getElementById('successPopupProgress');
+    document.getElementById('successPopupTitle').innerText = title;
+    document.getElementById('successPopupMsg').innerText = msg;
+    progress.style.width = '0%';
+    popup.classList.remove('hidden');
+    popup.classList.add('flex');
+    setTimeout(() => { inner.classList.remove('scale-90'); inner.classList.add('scale-100'); }, 50);
+    setTimeout(() => { progress.style.width = '100%'; }, 100);
+    setTimeout(() => {
+      popup.classList.add('hidden');
+      popup.classList.remove('flex');
+      inner.classList.add('scale-90');
+      inner.classList.remove('scale-100');
+      if (callback) callback();
+    }, delay);
+  }
+  window.showSuccessPopup = showSuccessPopup;
+
+  window.clearGuestPurchases = function() {
+    if (!confirm('هل تريد إخفاء مشترياتك السابقة من هذا المتصفح؟')) return;
+    guestPurchases = [];
+    saveGuestPurchases();
+    clearLibraryCache();
+    loadLibrary();
+  };
 
   window.addToCart = function(fileId, fileName, filePrice) {
     playClickSound();
@@ -323,7 +556,7 @@
           <h4 class="font-bold text-sm text-gray-800 dark:text-gray-200">${file.name}</h4>
           <span class="text-xs text-green-600 font-bold">${file.price ? file.price + ' ' + appCurrency : 'مجاني'}</span>
         </div>
-        <button onclick="removeFromCart('${file.id}')" class="text-red-500 p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20"><i class="fas fa-trash"></i></button>
+        <button onclick="removeFromCart('${file.id}')" class="text-red-500 p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20" aria-label="حذف"><i class="fas fa-trash"></i></button>
       </div>`;
     });
     html += `</div>
@@ -332,8 +565,10 @@
         <span class="font-bold text-gray-600 dark:text-gray-300">الإجمالي:</span>
         <span class="text-xl font-extrabold text-indigo-600">${total} ${appCurrency}</span>
       </div>
-      <button onclick="showPremiumModal()" class="w-full bg-indigo-600 text-white p-3 rounded-xl font-bold mb-3">شراء المحتويات (إدخال كود)</button>
-      <a href="https://chat.whatsapp.com/HI042GjVcQRBh7YBDZrb5m" target="_blank" class="w-full bg-green-500 text-white p-3 rounded-xl font-bold flex items-center justify-center gap-2">
+      <button onclick="showPremiumModal()" class="w-full bg-indigo-600 text-white p-3 rounded-xl font-bold mb-3">
+        <i class="fas fa-key ml-1"></i> تفعيل كود الشراء
+      </button>
+      <a href="https://wa.me/963993865879?text=أرغب%20بشراء%20الدروس%20التالية:%20${encodeURIComponent(cart.map(f => f.name).join(', '))}%20السعر%20الإجمالي:%20${total}%20${encodeURIComponent(appCurrency)}" target="_blank" class="w-full bg-green-500 text-white p-3 rounded-xl font-bold flex items-center justify-center gap-2">
         <i class="fab fa-whatsapp text-xl"></i> إرسال القائمة للشراء عبر واتساب
       </a>
     </div>`;
@@ -346,165 +581,451 @@
   }
 
   window.redeemCode = async function() {
-    const codeInput = document.getElementById('redeemCodeInput').value.trim();
+    const codeInputEl = document.getElementById('redeemCodeInput');
+    const codeInput = codeInputEl.value.trim().toUpperCase();
     const errBox = document.getElementById('redeemError');
     const successBox = document.getElementById('redeemSuccess');
-    if(!codeInput) { errBox.innerText = "الرجاء إدخال الكود"; errBox.classList.remove('hidden'); return; }
     
-    if (!currentUser) {
-      errBox.innerText = "يجب تسجيل الدخول أولاً لتفعيل الكود";
-      errBox.classList.remove('hidden');
-      return;
-    }
+    if(!codeInput) { errBox.innerText = "الرجاء إدخال الكود"; errBox.classList.remove('hidden'); return; }
+
+    const btn = document.querySelector('button[onclick="redeemCode()"]');
+    if (btn) { btn.disabled = true; btn.innerText = "جاري التفعيل..."; }
+    errBox.classList.add('hidden'); successBox.classList.add('hidden');
 
     try {
-      const q = query(collection(db, "codes"), where("code", "==", codeInput), where("isUsed", "==", false));
-      const querySnapshot = await getDocs(q);
-      if (querySnapshot.empty) { errBox.innerText = "الكود غير صحيح أو مستخدم بالفعل"; errBox.classList.remove('hidden'); successBox.classList.add('hidden'); return; }
-
-      const codeDoc = querySnapshot.docs[0];
-      const codeData = codeDoc.data();
+      const codeRef = doc(db, "codes", codeInput);
+      const codeSnap = await getDoc(codeRef);
+      if (!codeSnap.exists()) throw new Error("الكود غير صحيح");
       
-      await updateDoc(doc(db, "codes", codeDoc.id), { isUsed: true, usedBy: currentUser.uid, usedAt: new Date() });
-      
-      let userUpdate = {};
-      currentUserData.activePackages = currentUserData.activePackages || [];
-      currentUserData.activePackageSubjects = currentUserData.activePackageSubjects || [];
-      currentUserData.purchasedFiles = currentUserData.purchasedFiles || [];
+      const codeData = codeSnap.data();
+      if (codeData.isUsed === true) throw new Error("الكود مستخدم بالفعل");
+      if (codeData.isDisabled === true) throw new Error("هذا الكود معطّل");
 
-      if(codeData.type === 'package') {
-        if (codeData.targetId === 'pkg1') {
-          userUpdate.activePackages = arrayUnion('pkg1');
-          if(!currentUserData.activePackages.includes('pkg1')) currentUserData.activePackages.push('pkg1');
-        } else {
-          const pkgSnap = await getDoc(doc(db, "settings", "packages"));
-          if (pkgSnap.exists()) {
-            const pkgData = pkgSnap.data()[codeData.targetId];
-            if (pkgData && pkgData.subjects) {
-              // Fix for arrayUnion limit > 10
-              const subjects = pkgData.subjects;
-              for (let i = 0; i < subjects.length; i += 10) {
-                const chunk = subjects.slice(i, i + 10);
-                await updateDoc(doc(db, "users", currentUser.uid), { activePackageSubjects: arrayUnion(...chunk) });
-              }
-              subjects.forEach(sub => {
-                if(!currentUserData.activePackageSubjects.includes(sub)) currentUserData.activePackageSubjects.push(sub);
-              });
+      try {
+        await updateDoc(codeRef, { 
+          isUsed: true, 
+          usedBy: currentUser ? currentUser.uid : getGuestId(), 
+          usedAt: new Date() 
+        });
+      } catch(updateErr) {
+        console.warn('Could not mark code as used:', updateErr.message);
+        throw new Error("لا يمكن تفعيل الكود، حاول لاحقاً");
+      }
+
+      codeInputEl.value = '';
+      if (codeData.type === 'cart') {
+        const cartFileIds = cart.map(f => f.id);
+        if (cartFileIds.length === 0) throw new Error("السلة فارغة");
+        
+        // ✅ المرحلة 2.3: دائماً احفظ في Firestore (سواء زائر أو مسجل)
+                if (currentUser) {
+          const userRef = doc(db, "users", currentUser.uid);
+          const freshSnap = await getDoc(userRef);
+          const freshData = freshSnap.exists() ? freshSnap.data() : {};
+          const existing = Array.isArray(freshData.purchasedFiles) ? freshData.purchasedFiles : [];
+          const merged = [...new Set([...existing, ...cartFileIds])];
+          await setDoc(userRef, { 
+            email: currentUser.email || null,
+            purchasedFiles: merged,
+            activePackages: freshData.activePackages || [],
+            activePackageSubjects: freshData.activePackageSubjects || [],
+            ownedPackages: freshData.ownedPackages || []
+          }, { merge: true });
+          currentUserData = { ...freshData, purchasedFiles: merged };
+          await rebuildUserAccessCache();
+        }
+        // ملاحظة: لم نعد بحاجة لـ localStorage — currentUser موجود دائماً
+        
+        cart = []; saveCart(); updateCartBadge();
+        clearLibraryCache();
+        
+        const modalC = document.getElementById('premiumModal');
+        modalC.classList.add('hidden');
+        modalC.classList.remove('flex');
+        if (appStack.length > 0 && appStack[appStack.length - 1].name === 'premiumModal') {
+          appStack.pop();
+          navLevel = Math.max(0, navLevel - 1);
+        }
+        
+        showSuccessPopup('🎉 تم تفعيل الكود!', 'جميع ملفاتك أصبحت متاحة في مكتبتك', () => {
+          while(navLevel > 0) { const st = appStack.pop(); navLevel--; applyCloseForState(st); }
+          navLevel = 0;
+          try { history.replaceState({ level: 0 }, ''); } catch(e) {}
+          showAppTab('libraryContainer');
+        });
+        return;
+      }
+
+            if (codeData.type === 'package') {
+        if (!currentUser || currentUser.isAnonymous) throw new Error("أكواد الباقات تتطلب تسجيل الدخول بحساب حقيقي");
+
+        const userRef = doc(db, "users", currentUser.uid);
+        const freshSnap = await getDoc(userRef);
+        const freshData = freshSnap.exists() ? freshSnap.data() : {};
+
+        const ownedPackages = Array.isArray(freshData.ownedPackages) ? [...freshData.ownedPackages] : [];
+        if (!ownedPackages.some(p => p.id === codeData.targetId)) {
+          ownedPackages.push({ id: codeData.targetId, purchasedAt: new Date().toISOString(), code: codeInput });
+        }
+        const updatePayload = { 
+          email: currentUser.email,
+          ownedPackages,
+          activePackages: freshData.activePackages || [],
+          activePackageSubjects: freshData.activePackageSubjects || [],
+          purchasedFiles: freshData.purchasedFiles || []
+        };
+
+        const pkgSnap = await getDoc(doc(db, "settings", "packages"));
+        if (pkgSnap.exists()) {
+          const pkgData = pkgSnap.data()[codeData.targetId];
+          if (pkgData) {
+            if (pkgData.isFull) {
+              const currentActive = Array.isArray(freshData.activePackages) ? [...freshData.activePackages] : [];
+              if (!currentActive.includes(codeData.targetId)) currentActive.push(codeData.targetId);
+              updatePayload.activePackages = currentActive;
+            } else if (Array.isArray(pkgData.subjects)) {
+              const currentSubs = Array.isArray(freshData.activePackageSubjects) ? [...freshData.activePackageSubjects] : [];
+              const subsSet = new Set(currentSubs.map(normalizeSubject));
+              pkgData.subjects.forEach(s => subsSet.add(normalizeSubject(s)));
+              updatePayload.activePackageSubjects = Array.from(subsSet);
             }
           }
         }
+
+        await setDoc(userRef, updatePayload, { merge: true });
+        
+        const finalSnap = await getDoc(userRef);
+        if (finalSnap.exists()) currentUserData = finalSnap.data();
+        await rebuildUserAccessCache();
         cart = []; saveCart(); updateCartBadge();
-      } else if(codeData.type === 'cart') {
-        let cartFileIds = cart.map(f => f.id);
-        if(cartFileIds.length > 0) {
-          // Fix for arrayUnion limit > 10
-          for (let i = 0; i < cartFileIds.length; i += 10) {
-            const chunk = cartFileIds.slice(i, i + 10);
-            await updateDoc(doc(db, "users", currentUser.uid), { purchasedFiles: arrayUnion(...chunk) });
-          }
-          cartFileIds.forEach(id => { if(!currentUserData.purchasedFiles.includes(id)) currentUserData.purchasedFiles.push(id); });
+        clearLibraryCache();
+        
+        const modalP = document.getElementById('premiumModal');
+        modalP.classList.add('hidden');
+        modalP.classList.remove('flex');
+        if (appStack.length > 0 && appStack[appStack.length - 1].name === 'premiumModal') {
+          appStack.pop();
+          navLevel = Math.max(0, navLevel - 1);
         }
-        cart = []; saveCart(); updateCartBadge();
+        
+        showSuccessPopup('👑 تم تفعيل الباقة!', 'استمتع بجميع الدروس المتاحة الآن', () => {
+          while(navLevel > 0) { const st = appStack.pop(); navLevel--; applyCloseForState(st); }
+          navLevel = 0;
+          try { history.replaceState({ level: 0 }, ''); } catch(e) {}
+          showAppTab('libraryContainer');
+        });
+        return;
       }
 
-      errBox.classList.add('hidden');
-      successBox.classList.remove('hidden');
-      successBox.innerText = "تم تفعيل الكود بنجاح! 🎉";
-      
-      setTimeout(() => { 
-        closePremiumModal(); 
-        if(codeData.type === 'cart') {
-          while(navLevel > 0) { const st = appStack.pop(); navLevel--; applyCloseForState(st); }
-          showAppTab('libraryContainer'); 
-        }
-      }, 1500);
+      throw new Error("نوع الكود غير معروف");
 
-    } catch(e) { errBox.innerText = "حدث خطأ، حاول مرة أخرى: " + e.message; errBox.classList.remove('hidden'); }
+    } catch(e) {
+      errBox.innerText = "حدث خطأ: " + (e.message || e);
+      errBox.classList.remove('hidden');
+    } finally {
+      if (btn) { btn.disabled = false; btn.innerText = "تفعيل"; }
+    }
   }
 
-  window.handleLogout = function() { signOut(auth).then(() => { requestBack(); }); }
+  window.handleLogout = function() { 
+    signOut(auth).then(() => { 
+      userAccessCache = { hasFullPackage: false, subjects: new Set(), extraFileIds: new Set(), packagesSettingsCache: {} };
+      clearLibraryCache();
+      requestBack(); 
+    }); 
+  }
+
+  function renderLibraryFileCard(f) {
+    return `<div class="bg-white dark:bg-slate-800 p-3 rounded-xl shadow-sm border border-gray-100 dark:border-slate-700 flex justify-between items-center gap-2">
+      <div class="flex items-center gap-2 flex-1 min-w-0">
+        <div class="w-9 h-9 rounded-lg bg-indigo-50 dark:bg-indigo-900/30 text-indigo-500 flex items-center justify-center text-sm flex-shrink-0">
+          <i class="fas fa-file-alt"></i>
+        </div>
+        <h4 class="font-bold text-sm text-gray-800 dark:text-gray-200 truncate">${f.fileName}</h4>
+      </div>
+      <div class="flex gap-1.5 flex-shrink-0">
+        <button onclick="openLibraryFile('${f.id}')" class="bg-blue-500 hover:bg-blue-600 text-white text-xs px-3 py-2 rounded-lg font-bold flex items-center gap-1 transition-colors" aria-label="فتح">
+          <i class="fas fa-eye"></i> <span class="hidden sm:inline">فتح</span>
+        </button>
+        <button onclick="downloadLibraryFile('${f.id}')" class="bg-emerald-500 hover:bg-emerald-600 text-white text-xs px-3 py-2 rounded-lg font-bold flex items-center gap-1 transition-colors" aria-label="تحميل">
+          <i class="fas fa-download"></i> <span class="hidden sm:inline">تحميل</span>
+        </button>
+      </div>
+    </div>`;
+  }
+
+  window.downloadLibraryFile = async function(fileId) {
+    playClickSound();
+    try {
+      const docSnap = await getDoc(doc(db, "files", fileId));
+      if (!docSnap.exists()) { alert("الملف غير موجود"); return; }
+      const f = docSnap.data();
+      
+      const a = document.createElement('a');
+      a.href = f.fileData;
+      a.download = f.fileName || 'درس';
+      a.target = '_blank';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    } catch(e) { 
+      alert("خطأ في التحميل: " + e.message); 
+    }
+  };
 
   window.loadLibrary = async function() {
     const c = document.getElementById('libraryList');
-    if (!currentUser) {
-      c.innerHTML = `<div class="text-center mt-20 text-gray-400"><i class="fas fa-book-bookmark text-5xl mb-4 block"></i><p>الرجاء تسجيل الدخول لعرض مكتبتك.</p></div>`;
+    
+    const userKey = currentUser ? currentUser.uid : ('guest_' + guestPurchases.length + '_' + (currentUserData?.purchasedFiles?.length || 0));
+    try {
+      const raw = sessionStorage.getItem(CACHE_KEY_LIBRARY);
+      if (raw) {
+        const cached = JSON.parse(raw);
+        if (cached.userKey === userKey && (Date.now() - cached.time) < 5 * 60 * 1000) {
+          c.innerHTML = cached.html;
+          return;
+        }
+      }
+    } catch(e) {}
+    
+    c.innerHTML = `
+      <div class="space-y-3 mt-4">
+        <div class="bg-gray-100 dark:bg-slate-800 rounded-2xl h-16 animate-pulse"></div>
+        <div class="bg-gray-100 dark:bg-slate-800 rounded-2xl h-16 animate-pulse"></div>
+        <div class="bg-gray-100 dark:bg-slate-800 rounded-2xl h-16 animate-pulse"></div>
+      </div>`;
+    
+    let html = "";
+
+    if (currentUser && currentUserData?.name) {
+      html += `<div class="bg-gradient-to-l from-indigo-50 to-blue-50 dark:from-slate-800 dark:to-slate-700 p-4 rounded-2xl shadow-md border border-indigo-100 dark:border-slate-600 mb-4 text-center">
+        <i class="fas fa-user-graduate text-4xl text-indigo-500 mb-2"></i>
+        <h3 class="font-bold text-lg text-indigo-700 dark:text-indigo-300">أهلاً ${currentUserData.name} 👋</h3>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">هنا تجد جميع ملفاتك ومشترياتك</p>
+      </div>`;
+    }
+
+    // ✅ المرحلة 2.3: الزوار المجهولون يقرأون مشترياتهم من Firestore
+    if (currentUser && currentUser.isAnonymous) {
+      const purchasedFiles = currentUserData?.purchasedFiles || [];
+      
+      if (purchasedFiles.length === 0) {
+        c.innerHTML = `<div class="text-center mt-20 text-gray-400"><i class="fas fa-book-bookmark text-5xl mb-4 block"></i><p>لا توجد مشتريات. يمكنك الشراء المباشر من السلة بدون تسجيل دخول.</p></div>`;
+        return;
+      }
+
+      html += `<div class="bg-gradient-to-l from-emerald-50 to-teal-50 dark:from-slate-800 dark:to-slate-700 p-4 rounded-2xl shadow-md border border-emerald-200 dark:border-slate-600 mb-4 text-center">
+        <i class="fas fa-shopping-bag text-4xl text-emerald-500 mb-2"></i>
+        <h3 class="font-bold text-lg text-emerald-600 dark:text-emerald-400">مشترياتك المباشرة</h3>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">${purchasedFiles.length} ملف محفوظ على جهازك</p>
+      </div>`;
+
+      html += `<div class="bg-gradient-to-br from-rose-50 via-pink-50 to-amber-50 dark:from-slate-800 dark:via-slate-800 dark:to-slate-700 border-2 border-pink-200 dark:border-slate-600 rounded-2xl p-5 mb-5 relative overflow-hidden">
+        <div class="absolute top-0 left-0 text-pink-100 dark:text-slate-700 text-7xl opacity-40 -mt-2 -ml-2 pointer-events-none">
+          <i class="fas fa-heart"></i>
+        </div>
+        <div class="relative flex items-start gap-3">
+          <div class="w-12 h-12 bg-gradient-to-br from-pink-100 to-rose-100 dark:from-pink-900/40 dark:to-rose-900/30 rounded-full flex items-center justify-center flex-shrink-0 shadow-sm">
+            <i class="fas fa-heart text-pink-500 text-xl"></i>
+          </div>
+          <div class="flex-1">
+            <h4 class="font-extrabold text-pink-700 dark:text-pink-300 text-base mb-1.5">🌟 نحن نهتم بك وبمشترياتك</h4>
+            <p class="text-sm text-gray-700 dark:text-gray-300 leading-relaxed mb-3">
+              لتجد ملفاتك دائماً في انتظارك بكل حب، سجّل حسابك وستكون معك أينما ذهبت.
+            </p>
+            <button onclick="openAuthScreen()" class="bg-gradient-to-l from-pink-500 to-rose-500 hover:from-pink-600 hover:to-rose-600 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-md active:scale-95 transition-transform flex items-center gap-2">
+              <i class="fas fa-user-plus"></i> سجّل حسابك بحب 💛
+            </button>
+          </div>
+        </div>
+      </div>`;
+
+      const chunkSize = 30;
+      const guestChunks = [];
+      for (let i = 0; i < purchasedFiles.length; i += chunkSize) guestChunks.push(purchasedFiles.slice(i, i + chunkSize));
+      const guestResults = await Promise.all(guestChunks.map(chunk =>
+        getDocs(query(collection(db, "files"), where(documentId(), "in", chunk)))
+          .catch(e => { console.warn('guest chunk fail:', e); return { forEach: () => {} }; })
+      ));
+      const guestFiles = [];
+      guestResults.forEach(snap => snap.forEach(d => guestFiles.push({ id: d.id, ...d.data() })));
+      
+      if (guestFiles.length > 0) {
+        html += `<h3 class="font-bold text-md text-gray-800 dark:text-gray-100 mb-3 flex items-center gap-2">
+          <i class="fas fa-folder-open text-emerald-500"></i> ملفاتك (${guestFiles.length}):
+        </h3><div class="space-y-2">`;
+        guestFiles.forEach(f => { html += renderLibraryFileCard(f); });
+        html += `</div>`;
+      }
+      
+      c.innerHTML = html;
+      try { sessionStorage.setItem(CACHE_KEY_LIBRARY, JSON.stringify({ userKey, html, time: Date.now() })); } catch(e) {}
       return;
     }
 
-    let html = "";
-    const hasFullPackage = currentUserData?.activePackages?.includes('pkg1');
-    const subjectPackages = currentUserData?.activePackageSubjects || [];
-    const purchasedFiles = currentUserData?.purchasedFiles || [];
-
-    if (hasFullPackage) {
-      html += `<div class="bg-gradient-to-l from-amber-50 to-indigo-50 dark:from-slate-800 dark:to-slate-700 p-4 rounded-2xl shadow-md border border-amber-200 dark:border-slate-600 mb-6 text-center">
-        <i class="fas fa-crown text-4xl text-amber-500 mb-2"></i>
-        <h3 class="font-bold text-lg text-amber-600 dark:text-amber-400">أنت مشترك في الباقة الكاملة</h3>
-        <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">يمكنك فتح جميع الدروس المدفوعة مجاناً</p>
-      </div>`;
-    } else if (subjectPackages.length > 0) {
-      html += `<div class="bg-gradient-to-l from-blue-50 to-indigo-50 dark:from-slate-800 dark:to-slate-700 p-4 rounded-2xl shadow-md border border-blue-200 dark:border-slate-600 mb-6 text-center">
-        <i class="fas fa-box-open text-4xl text-blue-500 mb-2"></i>
-        <h3 class="font-bold text-lg text-blue-600 dark:text-blue-400">أنت مشترك في باقة المواد التالية:</h3>
-        <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">${subjectPackages.join(' - ')}</p>
-      </div>`;
+    // إذا لا يوجد مستخدم (نادراً ما يحدث مع Anonymous Auth)
+    if (!currentUser) {
+      c.innerHTML = `<div class="text-center mt-20 text-gray-400"><i class="fas fa-book-bookmark text-5xl mb-4 block"></i><p>جاري التحميل...</p></div>`;
+      return;
     }
 
-    if (purchasedFiles.length > 0) {
-      html += `<h3 class="font-bold text-md text-gray-700 dark:text-gray-200 mb-3">الدروس المشتراة فردياً:</h3><div class="space-y-3">`;
-      
-      // Fix for Firestore "in" query limit (>10)
-      const chunkSize = 10;
-      let allFiles = [];
-      for (let i = 0; i < purchasedFiles.length; i += chunkSize) {
-        const chunk = purchasedFiles.slice(i, i + chunkSize);
-        const q = query(collection(db, "files"), where(documentId(), "in", chunk));
-        const snap = await getDocs(q);
-        snap.forEach(d => allFiles.push({ id: d.id, ...d.data() }));
+    const ownedPackages = Array.isArray(currentUserData?.ownedPackages) ? currentUserData.ownedPackages : [];
+    const legacyActivePackages = currentUserData?.activePackages || [];
+    const purchasedFiles = currentUserData?.purchasedFiles || [];
+    const packagesSettings = userAccessCache.packagesSettingsCache || {};
+
+    const allOwnedIds = new Set();
+    ownedPackages.forEach(p => allOwnedIds.add(p.id));
+    legacyActivePackages.forEach(id => { if (packagesSettings[id]) allOwnedIds.add(id); });
+    const validPkgIds = Array.from(allOwnedIds).filter(id => packagesSettings[id]);
+
+    const allExtraFileIds = new Set();
+    validPkgIds.forEach(id => {
+      const pkg = packagesSettings[id];
+      if (Array.isArray(pkg.extraFiles)) {
+        pkg.extraFiles.forEach(fid => allExtraFileIds.add(fid));
       }
+    });
+
+    if (validPkgIds.length > 0) {
+      html += `<h3 class="font-bold text-lg text-gray-800 dark:text-gray-100 mb-3 flex items-center gap-2">
+        <i class="fas fa-box-open text-indigo-500"></i> باقاتك المشترك بها:
+      </h3><div class="space-y-4 mb-6">`;
       
-      allFiles.forEach(f => {
-        html += `<div class="bg-white dark:bg-slate-800 p-4 rounded-2xl shadow-sm border flex justify-between items-center">
-          <h4 class="font-bold text-sm text-gray-800 dark:text-gray-200">${f.fileName}</h4>
-          <button onclick="openLibraryFile('${f.id}')" class="bg-blue-500 text-white text-xs px-4 py-2 rounded-lg font-bold">فتح الدرس</button>
-        </div>`;
+      validPkgIds.forEach(id => {
+        const pkg = packagesSettings[id];
+        const isFull = pkg.isFull === true;
+        const subs = Array.isArray(pkg.subjects) && pkg.subjects.length > 0 ? pkg.subjects : [];
+        const extraCount = Array.isArray(pkg.extraFiles) ? pkg.extraFiles.length : 0;
+        
+        let bgClass, borderClass, iconClass, iconName;
+        if (isFull) {
+          bgClass = 'from-amber-50 to-yellow-50 dark:from-amber-900/30 dark:to-yellow-900/20';
+          borderClass = 'border-amber-300 dark:border-amber-700';
+          iconClass = 'text-amber-500';
+          iconName = 'fa-crown';
+        } else {
+          bgClass = 'from-blue-50 to-indigo-50 dark:from-slate-800 dark:to-slate-700';
+          borderClass = 'border-blue-300 dark:border-slate-600';
+          iconClass = 'text-blue-500';
+          iconName = 'fa-box-open';
+        }
+        
+        html += `<div class="bg-gradient-to-br ${bgClass} border-2 ${borderClass} rounded-2xl p-4 shadow-md">
+          <div class="flex items-center gap-3 mb-2">
+            <i class="fas ${iconName} text-3xl ${iconClass}"></i>
+            <h4 class="font-extrabold text-lg text-gray-800 dark:text-gray-100">${pkg.title}</h4>
+          </div>`;
+        
+        if (isFull) {
+          html += `<p class="text-sm text-gray-600 dark:text-gray-300 leading-relaxed">✅ <span class="font-bold">جميع المواد والدروس المدفوعة مفتوحة لك</span></p>`;
+        } else if (subs.length > 0) {
+          html += `<div class="flex items-start gap-2 mb-1"><span class="text-sm font-bold text-gray-600 dark:text-gray-300 mt-0.5">📚 المواد:</span><span class="text-sm text-gray-700 dark:text-gray-200 flex-1">${subs.join(' • ')}</span></div>`;
+        }
+        
+        if (extraCount > 0) {
+          html += `<div class="text-xs text-amber-600 dark:text-amber-400 mt-2">🎁 <span class="font-bold">${extraCount} ملف إضافي</span> مفتوح لك (معروض أسفل)</div>`;
+        }
+        
+        if (!isFull && subs.length > 0) {
+          html += `<p class="text-[11px] text-blue-600 dark:text-blue-300 mt-2 pt-2 border-t border-blue-200/50 dark:border-slate-600/50 leading-relaxed">💡 كل دروس هذه المواد مفتوحة لك تلقائياً — تصفحها من الصفحة الرئيسية.</p>`;
+        }
+        
+        html += `</div>`;
       });
+      
       html += `</div>`;
-    } else if (!hasFullPackage && subjectPackages.length === 0) {
-      html += `<div class="text-center mt-20 text-gray-400"><i class="fas fa-folder-open text-5xl mb-4 block"></i><p>لم تقم بشراء أي دروس بعد.</p></div>`;
+    }
+
+    if (allExtraFileIds.size > 0) {
+      const extraIdsArray = Array.from(allExtraFileIds);
+      const chunkSize = 30;
+      const extraChunks = [];
+      for (let i = 0; i < extraIdsArray.length; i += chunkSize) extraChunks.push(extraIdsArray.slice(i, i + chunkSize));
+      const extraResults = await Promise.all(extraChunks.map(chunk =>
+        getDocs(query(collection(db, "files"), where(documentId(), "in", chunk)))
+          .catch(e => { console.warn('extra chunk fail:', e); return { forEach: () => {} }; })
+      ));
+      const extraFiles = [];
+      extraResults.forEach(snap => snap.forEach(d => extraFiles.push({ id: d.id, ...d.data() })));
+      
+      if (extraFiles.length > 0) {
+        html += `<h3 class="font-bold text-md text-gray-800 dark:text-gray-100 mb-3 flex items-center gap-2 mt-6">
+          <i class="fas fa-gift text-amber-500"></i> ملفاتك الإضافية من الباقات (${extraFiles.length}):
+        </h3><div class="space-y-2">`;
+        extraFiles.forEach(f => { html += renderLibraryFileCard(f); });
+        html += `</div>`;
+      }
+    }
+
+    const individualPurchases = purchasedFiles.filter(fid => !allExtraFileIds.has(fid));
+    
+    if (individualPurchases.length > 0) {
+      const chunkSize = 30;
+      const indChunks = [];
+      for (let i = 0; i < individualPurchases.length; i += chunkSize) indChunks.push(individualPurchases.slice(i, i + chunkSize));
+      const indResults = await Promise.all(indChunks.map(chunk =>
+        getDocs(query(collection(db, "files"), where(documentId(), "in", chunk)))
+          .catch(e => { console.warn('individual chunk fail:', e); return { forEach: () => {} }; })
+      ));
+      const individualFiles = [];
+      indResults.forEach(snap => snap.forEach(d => individualFiles.push({ id: d.id, ...d.data() })));
+      
+      if (individualFiles.length > 0) {
+        html += `<h3 class="font-bold text-md text-gray-800 dark:text-gray-100 mb-3 flex items-center gap-2 mt-6">
+          <i class="fas fa-shopping-cart text-emerald-500"></i> مشترياتك الفردية (${individualFiles.length}):
+        </h3><div class="space-y-2">`;
+        individualFiles.forEach(f => { html += renderLibraryFileCard(f); });
+        html += `</div>`;
+      }
+    }
+
+    if (!html || (!html.includes('fa-user-graduate') && !html.includes('fa-box-open') && !html.includes('fa-gift') && !html.includes('fa-shopping-cart'))) {
+      if (!html.includes('fa-box-open') && !html.includes('fa-gift') && !html.includes('fa-shopping-cart')) {
+        html += `<div class="text-center mt-20 text-gray-400">
+          <i class="fas fa-folder-open text-5xl mb-4 block"></i>
+          <p>لم تقم بشراء أي دروس بعد.</p>
+        </div>`;
+      }
     }
 
     c.innerHTML = html;
+    try { sessionStorage.setItem(CACHE_KEY_LIBRARY, JSON.stringify({ userKey, html, time: Date.now() })); } catch(e) {}
+  }
+
+  function setFrameSandbox(frame, isExternal) {
+    if (isExternal) {
+      frame.setAttribute('sandbox', 'allow-scripts allow-popups allow-forms allow-modals allow-downloads');
+    } else {
+      frame.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-popups allow-forms allow-modals allow-downloads');
+    }
   }
 
   window.openLibraryFile = async function(fileId) {
     playClickSound();
     const docSnap = await getDoc(doc(db, "files", fileId));
     if (!docSnap.exists()) { alert("الدرس غير موجود"); return; }
-    
     const f = { id: docSnap.id, ...docSnap.data() };
     currentViewingFile = f;
     document.getElementById('lessonTitle').innerText = f.fileName;
     const frame = document.getElementById('viewerFrame');
-    frame.onload = null; 
+    frame.onload = null;
     document.getElementById('viewerScreen').style.display = 'flex';
     document.getElementById('appFrame').style.display = 'none';
     pushScreen('viewer');
     frame.src = "about:blank";
-    frame.srcdoc = `<div style="display:flex;justify-content:center;align-items:center;height:90vh;font-family:sans-serif;color:#666;"><div style="text-align:center;"><div style="border:4px solid #f3f3f3;border-top:4px solid #4f46e5;border-radius:50%;width:40px;height:40px;animation:spin 1s linear infinite;margin:0 auto;"></div><p style="margin-top:10px;">جاري التحميل...</p></div><style>@keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}</style></div>`;
-
+    frame.srcdoc = `<div style="display:flex;justify-content:center;align-items:center;height:90vh;font-family:sans-serif;color:#666;"><div style="text-align:center;"><div style="border:4px solid #f3f3f3;border-top:4px solid #4f46e5;border-radius:50%;width:40px;height:40px;animation:spin 1s linear infinite;margin:0 auto;"></div></div><style>@keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}</style></div>`;
     try {
       const result = await prepareFrameContent(f.fileData, f.isExternal, f.isPdf, f.fileName);
-      if (result.type === 'url') frame.src = result.content;
-      else frame.srcdoc = result.content;
-    } catch (e) { frame.srcdoc = `<div style="text-align:center;padding:20px;color:red;">خطأ في تحميل المحتوى.</div>`; }
-
-    if (currentUserData.purchasedFiles.includes(fileId) && !currentUserData.activePackages?.includes('pkg1')) {
-      try {
-        await updateDoc(doc(db, "users", currentUser.uid), { purchasedFiles: arrayRemove(fileId) });
-        currentUserData.purchasedFiles = currentUserData.purchasedFiles.filter(id => id !== fileId);
-      } catch(e) { console.error(e); }
-    }
+      if (result.type === 'url') {
+        const isExternal = result.content.startsWith('http://') || result.content.startsWith('https://');
+        setFrameSandbox(frame, isExternal);
+        frame.src = result.content;
+      } else {
+        setFrameSandbox(frame, false);
+        frame.srcdoc = result.content;
+      }
+    } catch (e) { frame.srcdoc = `<div style="text-align:center;padding:20px;color:red;">خطأ</div>`; }
   }
 
   window.loadPackages = async function() {
@@ -518,40 +1039,47 @@
         for(let i=1; i<=3; i++) {
           const pkg = data[`pkg${i}`];
           if(pkg && pkg.title) {
-            const isFull = i === 1;
-            const borderColor = isFull ? 'border-amber-400' : (i === 2 ? 'border-gray-300' : 'border-orange-300');
-            const badge = isFull ? '<span class="absolute top-0 right-1/2 translate-x-1/2 -mt-3 bg-amber-500 text-white text-[10px] px-3 py-1 rounded-full font-bold">الأكثر طلباً</span>' : '';
-            const btnColor = isFull ? 'bg-amber-500 hover:bg-amber-600' : 'bg-indigo-600 hover:bg-indigo-700';
+            const isFull = pkg.isFull === true;
+            const isMostRequested = (i === 2);
+            const borderColor = pkg.borderColor || (isMostRequested ? '#fb923c' : (isFull ? '#fbbf24' : '#d1d5db'));
+            const btnBg = pkg.buttonColor || (isMostRequested ? '#f97316' : (isFull ? '#f59e0b' : '#4f46e5'));
+            const cardBg = pkg.bgColor || '#ffffff';
+            const badge = isMostRequested ? '<span class="absolute top-0 right-1/2 translate-x-1/2 -mt-3 text-white text-[10px] px-3 py-1 rounded-full font-bold shadow-md" style="background:linear-gradient(to left,#f97316,#ea580c)">🔥 الأكثر طلباً</span>' : '';
+            
+            let subsHtml = '';
+            if (!isFull) {
+              const sp = Array.isArray(pkg.subjects) && pkg.subjects.length ? `<div class="text-xs text-gray-500 dark:text-gray-400 mb-1">📚 ${pkg.subjects.join(' • ')}</div>` : '';
+              const ep = Array.isArray(pkg.extraFiles) && pkg.extraFiles.length ? `<div class="text-xs text-amber-600 dark:text-amber-400 mb-2">🎁 يتضمن ${pkg.extraFiles.length} ملف إضافي</div>` : '';
+              subsHtml = sp + ep;
+            }
             
             html += `
-            <div class="relative bg-white dark:bg-slate-800 border-2 ${borderColor} rounded-2xl shadow-lg p-6 flex flex-col items-center text-center transform hover:scale-105 transition-transform duration-300">
+            <div class="relative border-2 rounded-2xl shadow-lg p-6 flex flex-col items-center text-center transform hover:scale-105 transition-transform duration-300 dark:bg-slate-800" style="border-color:${borderColor}; background-color:${cardBg}">
               ${badge}
               <h3 class="font-extrabold text-xl mb-2 text-gray-800 dark:text-white">${pkg.title}</h3>
-              <p class="text-gray-500 dark:text-gray-400 text-sm mb-4 min-h-[40px]">${pkg.desc || ''}</p>
+              <p class="text-gray-500 dark:text-gray-400 text-sm mb-2 min-h-[40px]">${pkg.desc || ''}</p>
+              ${subsHtml}
               <div class="text-3xl font-extrabold text-indigo-600 dark:text-indigo-400 mb-6">${pkg.price || 'مجاني'} ${pkg.price ? appCurrency : ''}</div>
-              <button onclick="showPremiumModal()" class="${btnColor} w-full text-white px-4 py-3 rounded-xl font-bold text-sm transition">اشترك الآن</button>
+              <button onclick="showPremiumModal()" class="w-full text-white px-4 py-3 rounded-xl font-bold text-sm transition" style="background:${btnBg}">اشترك الآن</button>
             </div>`;
           }
         }
         html += `</div>
         <div class="mt-8 bg-gray-50 dark:bg-slate-800 p-4 rounded-xl border text-center">
-          <p class="text-gray-500 text-sm mb-3">ليس لديك كود؟ تواصل معنا للحصول عليه:</p>
-          <a href="https://chat.whatsapp.com/HI042GjVcQRBh7YBDZrb5m" target="_blank" class="inline-flex items-center gap-2 bg-green-500 text-white px-4 py-2 rounded-xl font-bold text-sm">
-            <i class="fab fa-whatsapp text-lg"></i> الانضمام لمجموعة الواتساب
+          <p class="text-gray-500 text-sm mb-3">ليس لديك كود؟ تواصل معنا:</p>
+          <a href="https://wa.me/963993865879" target="_blank" class="inline-flex items-center gap-2 bg-green-500 text-white px-4 py-2 rounded-xl font-bold text-sm">
+            <i class="fab fa-whatsapp text-lg"></i> واتساب
           </a>
         </div>`;
         c.innerHTML = html;
-      } else {
-        c.innerHTML = "<p class='text-center text-gray-400 mt-10'>لا توجد باقات متاحة حالياً.</p>";
-      }
-    } catch(e) { c.innerHTML = "<p class='text-center text-red-500 mt-10'>خطأ في تحميل الباقات.</p>"; }
+      } else { c.innerHTML = "<p class='text-center text-gray-400 mt-10'>لا توجد باقات.</p>"; }
+    } catch(e) { c.innerHTML = "<p class='text-center text-red-500 mt-10'>خطأ في التحميل.</p>"; }
   }
 
   window.loadBookmarks = function() {
     if (activeListeners.bookmarks) activeListeners.bookmarks();
     activeListeners.bookmarks = onSnapshot(collection(db, "users", currentUser.uid, "bookmarks"), (snap) => {
-      bookmarks = [];
-      snap.forEach(d => bookmarks.push(d.id));
+      bookmarks = []; snap.forEach(d => bookmarks.push(d.id));
       if (!document.getElementById('savedContainer').classList.contains('hidden')) renderBookmarks();
     });
   }
@@ -570,23 +1098,13 @@
 
   function applyHeaderBg(bgUrl, opacity) { 
     const layer = document.getElementById('headerBgLayer'); 
-    if (layer) { 
-      layer.style.backgroundImage = `url(${bgUrl})`; 
-      layer.style.opacity = 1; 
-    }
+    if (layer) { layer.style.backgroundImage = `url(${bgUrl})`; layer.style.opacity = 1; }
     const overlay = document.getElementById('headerOverlay'); 
-    if (overlay) { 
-      overlay.style.opacity = (opacity || 30) / 100; 
-    }
+    if (overlay) { overlay.style.opacity = (opacity || 30) / 100; }
     const filesLayer = document.getElementById('headerBgLayerFiles'); 
-    if (filesLayer) {
-      filesLayer.style.backgroundImage = `url(${bgUrl})`;
-      filesLayer.style.opacity = 1;
-    }
+    if (filesLayer) { filesLayer.style.backgroundImage = `url(${bgUrl})`; filesLayer.style.opacity = 1; }
     const filesOverlay = document.getElementById('headerBgLayerFilesOverlay'); 
-    if (filesOverlay) { 
-      filesOverlay.style.opacity = ((opacity || 30) - 10) / 100;
-    }
+    if (filesOverlay) { filesOverlay.style.opacity = ((opacity || 30) - 10) / 100; }
   }
 
   window.loadAppSettings = async function() {
@@ -607,33 +1125,41 @@
     const bar = document.getElementById('marqueeBar');
     const txtEl = document.getElementById('marqueeText');
     const finalText = (text && text.trim() !== "") ? text : "🌟 أنت أقوى من امتحان البكالوريا.. ثق بذكائك وقدرتك على النجاح. كل دقيقة تذاكرها اليوم هي درجة تضيفها لطموحك غداً!";
-    
-    txtEl.innerText = finalText; 
+    txtEl.innerText = finalText;
     bar.classList.remove('hidden');
-    
-    const delay = 0.3; 
-    const finalSpeed = Number(speed) || 10;
-    const totalDuration = finalSpeed + delay; 
-    const endPercentage = (finalSpeed / totalDuration) * 100;
-    
-    const styleId = 'marquee-dynamic-style';
-    let dynStyle = document.getElementById(styleId);
-    if (!dynStyle) {
-      dynStyle = document.createElement('style');
-      dynStyle.id = styleId;
-      document.head.appendChild(dynStyle);
-    }
-    dynStyle.innerHTML = `
-      @keyframes marquee {
-        0% { right: 100%; }
-        ${endPercentage}% { right: -100%; }
-        100% { right: -100%; }
+    txtEl.style.animation = 'none';
+    txtEl.style.transform = 'translateX(-100%)';
+    requestAnimationFrame(() => {
+      const containerW = bar.clientWidth;
+      const textW = txtEl.scrollWidth;
+      if (containerW === 0 || textW === 0) {
+        setTimeout(() => applyMarquee(text, speed, color, bgColor), 150);
+        return;
       }
-    `;
-    txtEl.style.animationDuration = totalDuration + 's';
-    
-    if(color) txtEl.style.color = color; 
-    if(bgColor) bar.style.backgroundColor = bgColor; 
+      const delay = 0.3;
+      const finalSpeed = Number(speed) || 10;
+      const totalDuration = finalSpeed + delay;
+      const endPercentage = (finalSpeed / totalDuration) * 100;
+      const styleId = 'marquee-dynamic-style';
+      let dynStyle = document.getElementById(styleId);
+      if (!dynStyle) {
+        dynStyle = document.createElement('style');
+        dynStyle.id = styleId;
+        document.head.appendChild(dynStyle);
+      }
+      dynStyle.innerHTML = `
+        @keyframes marquee {
+          0% { transform: translateX(-${textW}px); }
+          ${endPercentage}% { transform: translateX(${containerW}px); }
+          100% { transform: translateX(${containerW}px); }
+        }
+      `;
+      txtEl.style.animation = 'none';
+      void txtEl.offsetWidth;
+      txtEl.style.animation = `marquee ${totalDuration}s linear infinite`;
+    });
+    if(color) txtEl.style.color = color;
+    if(bgColor) bar.style.backgroundColor = bgColor;
   }
 
   window.loadSlider = function() {
@@ -660,10 +1186,7 @@
     if (splashHidden) return;
     splashHidden = true;
     const ss = document.getElementById('splashScreen');
-    if (ss) {
-      ss.classList.add('opacity-0');
-      setTimeout(() => { if (ss) ss.style.display = 'none'; }, 500);
-    }
+    if (ss) { ss.classList.add('opacity-0'); setTimeout(() => { if (ss) ss.style.display = 'none'; }, 500); }
   }
 
   window.loadAppLessons = function() {
@@ -700,8 +1223,8 @@
   window.renderGrid = function() {
     let finalHTML = "";
     fixedSubjects.forEach(sub => {
-      const count = lessonsData.filter(l => l.subject === sub.name).length;
-      finalHTML += `<div onclick="openSubject('${sub.name}')" class="card-hover bg-gradient-to-br ${sub.color} p-4 rounded-3xl shadow-lg cursor-pointer active:scale-95 transition-transform duration-150 h-40 flex flex-col justify-between text-white relative overflow-hidden"><div class="absolute top-0 left-0 w-24 h-24 bg-white/10 rounded-full -mt-10 -ml-10"></div><div class="flex justify-between items-start relative z-10"><i class="fas ${sub.icon} text-3xl opacity-90"></i><span class="bg-white/25 backdrop-blur-sm px-2 py-1 rounded-full text-xs font-bold">${count} درس</span></div><h3 class="text-lg font-extrabold leading-tight relative z-10">${sub.name}</h3></div>`;
+      const count = lessonsData.filter(l => normalizeSubject(l.subject) === normalizeSubject(sub.name)).length;
+      finalHTML += `<div onclick="openSubject('${sub.name}')" class="card-hover bg-gradient-to-br ${sub.color} p-4 rounded-3xl shadow-lg cursor-pointer active:scale-95 transition-transform duration-150 h-40 flex flex-col justify-between text-white relative overflow-hidden" role="button" tabindex="0" aria-label="مادة ${sub.name}"><div class="absolute top-0 left-0 w-24 h-24 bg-white/10 rounded-full -mt-10 -ml-10"></div><div class="flex justify-between items-start relative z-10"><i class="fas ${sub.icon} text-3xl opacity-90" aria-hidden="true"></i><span class="bg-white/25 backdrop-blur-sm px-2 py-1 rounded-full text-xs font-bold">${count} درس</span></div><h3 class="text-lg font-extrabold leading-tight relative z-10">${sub.name}</h3></div>`;
     });
     document.getElementById('lessonsGrid').innerHTML = finalHTML;
   };
@@ -709,15 +1232,16 @@
   function renderLessonCard(lesson) {
     let isBookmarked = bookmarks.includes(lesson.id);
     let starClass = isBookmarked ? 'fa-solid text-amber-400' : 'fa-regular text-gray-300 dark:text-gray-600';
-    return `<div class="card-hover bg-white dark:bg-slate-800 p-4 rounded-2xl shadow-sm border border-gray-100 dark:border-slate-700 flex justify-between items-center cursor-pointer mb-3" onclick="openLesson('${lesson.id}')"><div class="flex items-center gap-4"><div class="w-12 h-12 rounded-xl bg-indigo-50 dark:bg-indigo-900/30 text-indigo-500 flex items-center justify-center text-xl"><i class="fas fa-book"></i></div><h4 class="font-bold text-md text-gray-800 dark:text-gray-200">${lesson.title}</h4></div><div class="flex items-center gap-2"><button onclick="toggleBookmark('${lesson.id}', event)" class="text-2xl w-8 h-8 flex items-center justify-center"><i class="fa-star ${starClass}"></i></button><span class="text-indigo-600 dark:text-indigo-400 text-xl bg-indigo-50 dark:bg-indigo-900/30 w-10 h-10 rounded-full flex items-center justify-center"><i class="fas fa-chevron-left text-sm"></i></span></div></div>`;
+    return `<div class="card-hover bg-white dark:bg-slate-800 p-4 rounded-2xl shadow-sm border border-gray-100 dark:border-slate-700 flex justify-between items-center cursor-pointer mb-3" onclick="openLesson('${lesson.id}')"><div class="flex items-center gap-4"><div class="w-12 h-12 rounded-xl bg-indigo-50 dark:bg-indigo-900/30 text-indigo-500 flex items-center justify-center text-xl"><i class="fas fa-book"></i></div><h4 class="font-bold text-md text-gray-800 dark:text-gray-200">${lesson.title}</h4></div><div class="flex items-center gap-2"><button onclick="toggleBookmark('${lesson.id}', event)" class="text-2xl w-8 h-8 flex items-center justify-center" aria-label="حفظ"><i class="fa-star ${starClass}"></i></button><span class="text-indigo-600 dark:text-indigo-400 text-xl bg-indigo-50 dark:bg-indigo-900/30 w-10 h-10 rounded-full flex items-center justify-center"><i class="fas fa-chevron-left text-sm"></i></span></div></div>`;
   }
 
   window.openSubject = function(subjectName, skipPush = false) {
+    if (typeof skipPush !== 'boolean') skipPush = false;
     playClickSound();
     document.getElementById('listTitle').innerText = subjectName;
     const container = document.getElementById('lessonsList');
-    const filteredLessons = lessonsData.filter(l => l.subject === subjectName);
-    if (filteredLessons.length === 0) { container.innerHTML = `<div class="text-center mt-20 text-gray-400"><i class="far fa-folder-open text-5xl mb-4 block"></i><p>لا توجد دروس في هذه المادة.</p></div>`; }
+    const filteredLessons = lessonsData.filter(l => normalizeSubject(l.subject) === normalizeSubject(subjectName));
+    if (filteredLessons.length === 0) { container.innerHTML = `<div class="text-center mt-20 text-gray-400"><i class="far fa-folder-open text-5xl mb-4 block"></i><p>لا توجد دروس.</p></div>`; }
     else { let listHTML = ""; filteredLessons.forEach(lesson => listHTML += renderLessonCard(lesson)); container.innerHTML = listHTML; }
     document.getElementById('gridView').style.display = 'none';
     document.getElementById('listView').style.display = 'block';
@@ -747,17 +1271,13 @@
     const input = document.getElementById('searchInput');
     const clearBtn = document.getElementById('searchClearBtn');
     const query = input.value.toLowerCase();
-    
-    if(query.length > 0) clearBtn.classList.remove('hidden'); 
-    else clearBtn.classList.add('hidden');
-
+    if(query.length > 0) clearBtn.classList.remove('hidden'); else clearBtn.classList.add('hidden');
     clearTimeout(searchTimeout);
     searchTimeout = setTimeout(() => {
       if (query.trim() === "") { showGridView(); return; }
       document.getElementById('listTitle').innerText = "نتائج البحث";
       const container = document.getElementById('lessonsList');
       const filteredLessons = lessonsData.filter(l => l.title.toLowerCase().includes(query));
-      
       if (filteredLessons.length === 0) {
         container.innerHTML = "<p class='text-gray-400 text-center mt-10'>لا توجد نتائج.</p>";
       } else {
@@ -765,7 +1285,6 @@
         filteredLessons.forEach(lesson => listHTML += renderLessonCard(lesson));
         container.innerHTML = listHTML;
       }
-      
       document.getElementById('gridView').style.display = 'none';
       document.getElementById('listView').style.display = 'block';
       currentView = "search";
@@ -773,6 +1292,7 @@
   };
 
   window.openLesson = function(id, skipPush = false) {
+    if (typeof skipPush !== 'boolean') skipPush = false;
     playClickSound();
     const lesson = lessonsData.find(l => l.id === id);
     if (!lesson) return;
@@ -783,13 +1303,10 @@
     if(!skipPush) pushScreen('lessonFiles', { lessonId: id });
     if (activeListeners.files) activeListeners.files();
     const q = query(collection(db, "files"), where("lessonId", "==", id));
-    
     activeListeners.files = onSnapshot(q, (snap) => {
       currentLessonFiles = [];
       snap.forEach(d => currentLessonFiles.push({ id: d.id, subject: lesson.subject, ...d.data() })); 
-      
       currentLessonFiles.sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
-
       if (currentLessonFiles.length === 0) { document.getElementById('filesContainer').innerHTML = "<p class='text-gray-400 text-center mt-10'>لا توجد ملفات.</p>"; return; }
       let html = `<div class="space-y-4 mt-2">`;
       currentLessonFiles.forEach((f, index) => {
@@ -797,22 +1314,21 @@
         const cardBg = isExtra ? 'from-red-50 to-rose-50 dark:from-red-900/20 dark:to-slate-800 border-red-200 dark:border-red-800' : 'from-blue-50 to-indigo-50 dark:from-slate-800 dark:to-slate-700 border-white dark:border-slate-600';
         const iconHtml = isExtra ? `<i class="fas fa-star text-red-500"></i>` : `${index+1}`;
         const extraBadge = isExtra ? '<span class="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded font-bold">إضافي</span>' : '';
-        
-        let lockBadge = f.isPremium ? '<span class="text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded font-bold">مدفوع</span>' : '<span class="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded font-bold">مجاني</span>';
-        let priceTag = (f.isPremium && f.price) ? `<span class="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded font-bold">${f.price} ${appCurrency}</span>` : '';
-        
-        const downloadBtnHtml = `<button onclick="handleDownload(${index})" class="bg-emerald-50 dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 p-2.5 rounded-lg border border-emerald-100 dark:border-slate-700 hover:bg-emerald-100 transition-colors"><i class="fas fa-download"></i></button>`;
-
+        const hasAccess = canAccessFile(f);
+        let lockBadge = f.isPremium ? (hasAccess ? '<span class="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded font-bold">✓ مشترك</span>' : '<span class="text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded font-bold">مدفوع</span>') : '<span class="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded font-bold">مجاني</span>';
+        const downloadBtnHtml = `<button onclick="handleDownload(${index})" class="bg-emerald-50 dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 p-2.5 rounded-lg border border-emerald-100 dark:border-slate-700 hover:bg-emerald-100 transition-colors" aria-label="تحميل"><i class="fas fa-download"></i></button>`;
+        const priceBox = (f.isPremium && f.price && !hasAccess) ? `<div class="text-xs font-extrabold text-amber-700 bg-amber-50 dark:bg-amber-900/30 border-2 border-amber-300 rounded-lg px-2 py-1 whitespace-nowrap">💰 ${f.price} ${appCurrency}</div>` : '';
         html += `<div class="card-hover bg-gradient-to-l ${cardBg} p-4 rounded-2xl shadow-md border flex items-center justify-between">
           <div class="flex items-center gap-3 flex-1">
             <span class="w-8 h-8 bg-indigo-100 dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 rounded-full flex items-center justify-center font-bold text-sm">${iconHtml}</span>
             <div class="flex flex-col">
               <h4 class="font-bold text-sm text-gray-800 dark:text-gray-200">${f.fileName}</h4>
-              <div class="flex gap-1 mt-1 items-center">${lockBadge} ${priceTag} ${extraBadge}</div>
+              <div class="flex gap-1 mt-1 items-center flex-wrap">${lockBadge} ${extraBadge}</div>
             </div>
           </div>
           <div class="flex gap-2 items-center">
-            <button onclick="playClickSound(); viewFileByIndex(${index})" class="bg-blue-500 text-white text-xs px-6 py-2 rounded-lg font-bold flex items-center gap-1 hover:bg-blue-600 transition-colors"><i class="fas fa-eye"></i> عرض</button>
+            ${priceBox}
+            <button onclick="playClickSound(); viewFileByIndex(${index})" class="bg-blue-500 text-white text-xs px-4 py-2 rounded-lg font-bold flex items-center gap-1 hover:bg-blue-600 transition-colors" aria-label="عرض"><i class="fas fa-eye"></i> عرض</button>
             ${downloadBtnHtml}
           </div>
         </div>`;
@@ -826,15 +1342,9 @@
     playClickSound();
     const f = currentLessonFiles[index];
     if (!f) return;
-    if (f.isPremium) {
-      if (!currentUser) { openAuthScreen(); return; }
-      const hasFullPackage = currentUserData?.activePackages?.includes('pkg1');
-      const hasSubjectPackage = currentUserData?.activePackageSubjects?.includes(f.subject);
-      const hasFile = currentUserData?.purchasedFiles?.includes(f.id);
-      if (!hasFullPackage && !hasSubjectPackage && !hasFile) {
-        showPremiumModal();
-        return;
-      }
+    if (f.isPremium && !canAccessFile(f)) {
+      showPremiumModal();
+      return;
     }
     const a = document.createElement('a');
     a.href = f.fileData;
@@ -864,13 +1374,11 @@
       } else if (fileUrl.startsWith('http')) {
         const response = await fetch(fileUrl); htmlText = await response.text();
       } else { htmlText = fileUrl; }
-
       htmlText = htmlText.replace(/<title>.*?<\/title>/gi, '');
       const titleTag = `<title>${fileTitle || 'درس'}</title>`;
       const mathJaxConfig = `<script>window.MathJax = { tex: { inlineMath: [['$', '$'], ['\\\\(', '\\\\)']], displayMath: [['$$', '$$'], ['\\\\[', '\\\\]']] }, svg: { scale: 0.9 } };<\/script>`;
       const mathJaxScript = '<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"><\/script>';
-      const sizeCss = `<style>mjx-container { font-size: 1.05em !important; scale: 1 !important; display: inline-block !important; vertical-align: middle !important; margin: 0 !important; padding: 0 !important; line-height: 1.2 !important; } mjx-container[display="true"] { display: block !important; margin: 2mm 0 !important; } mjx-container svg { max-width: 100% !important; height: auto !important; } @media print { @page { size: A4 portrait; margin: 10mm; } html, body { font-size: 10pt !important; line-height: 1.5 !important; margin: 0 !important; padding: 0 !important; background: #fff !important; color: #000 !important; } .container { max-width: 100% !important; border-radius: 0 !important; box-shadow: none !important; } .sticky-nav, .no-print { display: none !important; } .header, .footer { padding: 3mm 6mm !important; break-inside: avoid !important; } .section { margin: 0 0 3mm 0 !important; border: 1px solid #999 !important; box-shadow: none !important; break-inside: auto !important; } .section-header { padding: 1.5mm 2.5mm !important; } .content-box { padding: 2mm 3mm !important; } .box { padding: 1.5mm 2.5mm !important; margin: 1.5mm 0 !important; font-size: 9.5pt !important; break-inside: avoid !important; } .law-box { font-size: 10pt !important; padding: 2mm 3mm !important; break-inside: avoid !important; } .law-box .law-title { font-size: 9pt !important; } .flex-row { display: flex !important; flex-direction: row !important; flex-wrap: nowrap !important; gap: 3mm !important; } table, tr, thead, tbody { break-inside: avoid !important; } h1, h2, h3 { break-after: avoid; } p, li { orphans: 3; widows: 3; } mjx-container { font-size: 8.5pt !important; line-height: 1.2 !important; vertical-align: middle !important; margin: 0 !important; padding: 0 !important; } mjx-container[display="true"] { margin: 1.5mm 0 !important; } .law-box mjx-container { font-size: 9pt !important; } }</style>`;
-
+      const sizeCss = `<style>mjx-container { font-size: 1.05em !important; } @media print { @page { size: A4 portrait; margin: 10mm; } }</style>`;
       if (htmlText.includes('</head>')) {
         htmlText = htmlText.replace('</head>', titleTag + mathJaxConfig + mathJaxScript + sizeCss + '</head>');
       } else if (htmlText.includes('<head>')) {
@@ -885,44 +1393,32 @@
   window.viewFileByIndex = async function(index) {
     const f = currentLessonFiles[index];
     if (!f) return;
-    
-    if (f.isPremium) {
-      if (!currentUser) { openAuthScreen(); return; }
-      
-      const hasFullPackage = currentUserData?.activePackages?.includes('pkg1');
-      const hasSubjectPackage = currentUserData?.activePackageSubjects?.includes(f.subject);
-      const hasFile = currentUserData?.purchasedFiles?.includes(f.id);
-      
-      if (!hasFullPackage && !hasSubjectPackage && !hasFile) {
-        document.getElementById('singleBuyFileName').innerText = f.fileName + (f.price ? ` - السعر: ${f.price} ${appCurrency}` : '');
-        document.getElementById('addSingleToCartBtn').onclick = function() { addToCart(f.id, f.fileName, f.price); };
-        openSingleBuyModal();
-        return;
-      }
-
-      if (hasFile && !hasFullPackage && !hasSubjectPackage) {
-        try {
-          await updateDoc(doc(db, "users", currentUser.uid), { purchasedFiles: arrayRemove(f.id) });
-          currentUserData.purchasedFiles = currentUserData.purchasedFiles.filter(id => id !== f.id);
-        } catch(e) { console.error("Failed to remove file access:", e); }
-      }
+    if (f.isPremium && !canAccessFile(f)) {
+      document.getElementById('singleBuyFileName').innerText = f.fileName + (f.price ? ` - السعر: ${f.price} ${appCurrency}` : '');
+      document.getElementById('addSingleToCartBtn').onclick = function() { addToCart(f.id, f.fileName, f.price); };
+      openSingleBuyModal();
+      return;
     }
-
     currentViewingFile = f;
     document.getElementById('lessonTitle').innerText = f.fileName;
     const frame = document.getElementById('viewerFrame');
-    frame.onload = null; 
+    frame.onload = null;
     document.getElementById('viewerScreen').style.display = 'flex';
     document.getElementById('lessonFilesScreen').style.display = 'none';
     pushScreen('viewer');
     frame.src = "about:blank";
-    frame.srcdoc = `<div style="display:flex;justify-content:center;align-items:center;height:90vh;font-family:sans-serif;color:#666;"><div style="text-align:center;"><div style="border:4px solid #f3f3f3;border-top:4px solid #4f46e5;border-radius:50%;width:40px;height:40px;animation:spin 1s linear infinite;margin:0 auto;"></div><p style="margin-top:10px;">جاري التحميل...</p></div><style>@keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}</style></div>`;
-
+    frame.srcdoc = `<div style="display:flex;justify-content:center;align-items:center;height:90vh;font-family:sans-serif;color:#666;"><div style="text-align:center;"><div style="border:4px solid #f3f3f3;border-top:4px solid #4f46e5;border-radius:50%;width:40px;height:40px;animation:spin 1s linear infinite;margin:0 auto;"></div></div><style>@keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}</style></div>`;
     try {
       const result = await prepareFrameContent(f.fileData, f.isExternal, f.isPdf, f.fileName);
-      if (result.type === 'url') frame.src = result.content;
-      else frame.srcdoc = result.content;
-    } catch (e) { frame.srcdoc = `<div style="text-align:center;padding:20px;color:red;">خطأ في تحميل المحتوى.</div>`; }
+      if (result.type === 'url') {
+        const isExternal = result.content.startsWith('http://') || result.content.startsWith('https://');
+        setFrameSandbox(frame, isExternal);
+        frame.src = result.content;
+      } else {
+        setFrameSandbox(frame, false);
+        frame.srcdoc = result.content;
+      }
+    } catch (e) { frame.srcdoc = `<div style="text-align:center;padding:20px;color:red;">خطأ</div>`; }
   };
 
   window.closeLesson = function() { requestBack(); };
@@ -945,10 +1441,7 @@
         setTimeout(() => { document.title = originalTitle; }, 500);
         overlay.classList.add('hidden'); overlay.classList.remove('flex');
       }, 300);
-    } catch(e) { 
-      alert("تعذر فتح نافذة الطباعة."); 
-      overlay.classList.add('hidden'); overlay.classList.remove('flex'); 
-    }
+    } catch(e) { alert("تعذر فتح نافذة الطباعة."); overlay.classList.add('hidden'); overlay.classList.remove('flex'); }
   };
 
   window.openExamFile = function(url, title) {
@@ -956,9 +1449,9 @@
     if (!url) { alert("الملف غير متوفر"); return; }
     const win = window.open();
     if (win) {
-      win.document.write(`<html><head><title>${title || 'ملف'}</title></head><body style="margin:0;"><iframe src="${url}" style="width:100%;height:100vh;border:none;"></iframe></body></html>`);
+      win.document.write(`<html><head><title>${title || 'ملف'}</title></head><body style="margin:0;"><iframe src="${url}" sandbox="allow-scripts allow-popups allow-forms allow-modals allow-downloads" style="width:100%;height:100vh;border:none;"></iframe></body></html>`);
     } else {
-      alert("الرجاء السماح بالنوافذ المنبثقة لعرض الملف.");
+      alert("الرجاء السماح بالنوافذ المنبثقة.");
     }
   };
 
@@ -971,12 +1464,11 @@
         const ex = d.data();
         const lockBadge = ex.isPremium ? '<span class="text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded font-bold">مدفوع</span>' : '<span class="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded font-bold">مجاني</span>';
         const viewBtn = ex.isPremium ? 
-          `<button onclick="showPremiumModal()" class="bg-indigo-50 text-indigo-600 p-3 rounded-xl"><i class="fas fa-eye"></i></button>` : 
-          `<button onclick="openExamFile('${ex.fileUrl}', '${ex.title.replace(/'/g, "\\'")}')" class="bg-indigo-50 text-indigo-600 p-3 rounded-xl hover:bg-indigo-100 transition-colors"><i class="fas fa-eye"></i></button>`;
+          `<button onclick="showPremiumModal()" class="bg-indigo-50 text-indigo-600 p-3 rounded-xl" aria-label="عرض"><i class="fas fa-eye"></i></button>` : 
+          `<button onclick="openExamFile('${ex.fileUrl}', '${ex.title.replace(/'/g, "\\'")}')" class="bg-indigo-50 text-indigo-600 p-3 rounded-xl hover:bg-indigo-100 transition-colors" aria-label="عرض"><i class="fas fa-eye"></i></button>`;
         const dlBtn = ex.isPremium ? 
-          `<a href="#" onclick="event.preventDefault(); showPremiumModal();" class="bg-emerald-50 text-emerald-600 p-3 rounded-xl"><i class="fas fa-download"></i></a>` : 
-          `<a href="${ex.fileUrl}" target="_blank" download="${ex.title}" class="bg-emerald-50 text-emerald-600 p-3 rounded-xl hover:bg-emerald-100 transition-colors"><i class="fas fa-download"></i></a>`;
-          
+          `<a href="#" onclick="event.preventDefault(); showPremiumModal();" class="bg-emerald-50 text-emerald-600 p-3 rounded-xl" aria-label="تحميل"><i class="fas fa-download"></i></a>` : 
+          `<a href="${ex.fileUrl}" target="_blank" download="${ex.title}" class="bg-emerald-50 text-emerald-600 p-3 rounded-xl hover:bg-emerald-100 transition-colors" aria-label="تحميل"><i class="fas fa-download"></i></a>`;
         c.innerHTML += `<div class="card-hover bg-white dark:bg-slate-800 p-4 rounded-2xl shadow-sm mb-3 flex justify-between items-center border"><div class="flex items-center gap-3"><div class="w-12 h-12 rounded-xl bg-indigo-50 flex items-center justify-center text-xl text-indigo-600"><i class="fas fa-folder-open"></i></div><div><h3 class="font-bold text-md text-gray-800 dark:text-gray-200">${ex.title}</h3><div class="mt-1">${lockBadge}</div></div></div><div class="flex gap-2">${viewBtn}${dlBtn}</div></div>`;
       });
     });
@@ -986,52 +1478,151 @@
     const authBtn = document.getElementById('authBtnNav');
     const authIcon = document.getElementById('authIcon');
     const authText = document.getElementById('authText');
+    
     if (user) {
       currentUser = user;
-      authText.innerText = "تسجيل الخروج";
-      authIcon.className = "fas fa-right-from-bracket text-red-500 text-xl";
-      authBtn.onclick = handleLogout;
+      
+      // ✅ المرحلة 2.2: التمييز بين الزائر المجهول والعضو المسجل
+           if (user.isAnonymous) {
+        console.log('✅ [Anonymous Session] UID:', user.uid);
+        // الزائر المجهول → واجهة "تسجيل الدخول"
+        if (authText) authText.innerText = "تسجيل الدخول";
+        if (authIcon) authIcon.className = "fas fa-right-to-bracket text-indigo-500 text-xl";
+        if (authBtn) authBtn.onclick = (e) => { e.preventDefault(); openAuthScreen(); };
+        
+        // ✅ الخطوة 2.3: تحميل بيانات الزائر من Firestore
+        try {
+          const userRef = doc(db, "users", user.uid);
+          const userDoc = await getDoc(userRef);
+          
+          if (userDoc.exists()) {
+            currentUserData = userDoc.data();
+            console.log('📦 [Anonymous] بيانات موجودة:', currentUserData.purchasedFiles?.length || 0, 'ملف');
+          } else {
+            // زائر جديد — إنشاء وثيقة
+                       // زائر جديد — إنشاء وثيقة
+            currentUserData = {
+              email: null,
+              name: '',
+              activePackages: [],
+              activePackageSubjects: [],
+              purchasedFiles: [],
+              ownedPackages: [],
+              createdAt: new Date()
+            };
+            await setDoc(userRef, currentUserData);
+            console.log('📦 [Anonymous] تم إنشاء وثيقة جديدة');
+          }
+        } catch(e) {
+          console.warn('⚠️ تحميل بيانات الزائر فشل:', e.message);
+          currentUserData = { activePackages: [], activePackageSubjects: [], purchasedFiles: [], ownedPackages: [] };
+        }
+        
+        userAccessCache = { hasFullPackage: false, subjects: new Set(), extraFileIds: new Set(), packagesSettingsCache: {} };
+        
+        // تحديث المكتبة إن كانت معروضة
+        if (!document.getElementById('libraryContainer').classList.contains('hidden')) loadLibrary();
+        return;
+      }
+      
+      // عضو مسجل → الكود الحالي كما هو
+      if (authText) authText.innerText = "تسجيل الخروج";
+      if (authIcon) authIcon.className = "fas fa-right-from-bracket text-red-500 text-xl";
+      if (authBtn) authBtn.onclick = (e) => { e.preventDefault(); handleLogout(); };
+      
       try {
-        const userDoc = await getDoc(doc(db, "users", user.uid));
-        if (userDoc.exists()) { currentUserData = userDoc.data(); }
-        else { currentUserData = { activePackages: [], activePackageSubjects: [], purchasedFiles: [] }; }
+        const userRef = doc(db, "users", user.uid);
+        const userDoc = await getDoc(userRef);
+        
+        if (userDoc.exists()) { 
+          currentUserData = userDoc.data(); 
+        } else { 
+          currentUserData = { 
+            email: user.email,
+            name: user.displayName || '',
+            activePackages: [], 
+            activePackageSubjects: [], 
+            purchasedFiles: [], 
+            ownedPackages: [],
+            createdAt: new Date()
+          };
+          try {
+            await setDoc(userRef, currentUserData);
+          } catch(setErr) { 
+            console.warn('Failed to create user doc:', setErr.message); 
+          }
+        }
+        
+        loadGuestPurchases();
+        if (guestPurchases.length > 0) {
+          const existing = currentUserData.purchasedFiles || [];
+          const merged = [...new Set([...existing, ...guestPurchases])];
+          if (merged.length !== existing.length) {
+            try {
+              await setDoc(userRef, { purchasedFiles: merged }, { merge: true });
+              currentUserData.purchasedFiles = merged;
+            } catch(e) { console.warn('merge failed:', e.message); }
+          }
+          guestPurchases = []; saveGuestPurchases();
+        }
+        
+        clearLibraryCache();
+        await rebuildUserAccessCache();
         loadBookmarks(); 
-      } catch(e) { currentUserData = { activePackages: [], activePackageSubjects: [], purchasedFiles: [] }; }
-    } else {
-      currentUser = null;
-      currentUserData = null;
+        if (!document.getElementById('libraryContainer').classList.contains('hidden')) loadLibrary();
+      } catch(e) { 
+        console.warn('onAuthStateChanged error:', e);
+        currentUserData = { activePackages: [], activePackageSubjects: [], purchasedFiles: [], ownedPackages: [] }; 
+      }
+       } else {
+      // ✅ المرحلة 2.2: تسجيل دخول مجهول تلقائياً للزوار
+      try {
+        await signInAnonymously(auth);
+        // onAuthStateChanged سيُستدعى مرة أخرى مع user.isAnonymous = true
+        return;
+      } catch(e) {
+        console.warn('⚠️ Anonymous sign-in failed:', e.code, e.message);
+      }
+      
+      // Fallback: حالة عدم الاتصال
+      currentUser = null; 
+      currentUserData = null; 
       bookmarks = [];
-      authText.innerText = "تسجيل الدخول";
-      authIcon.className = "fas fa-right-to-bracket text-indigo-500 text-xl";
-      authBtn.onclick = openAuthScreen;
+      userAccessCache = { hasFullPackage: false, subjects: new Set(), extraFileIds: new Set(), packagesSettingsCache: {} };
+      if (authText) authText.innerText = "تسجيل الدخول";
+      if (authIcon) authIcon.className = "fas fa-right-to-bracket text-indigo-500 text-xl";
+      if (authBtn) authBtn.onclick = (e) => { e.preventDefault(); openAuthScreen(); };
     }
   });
 
   function restoreState() {
     if (stateRestored) return;
     stateRestored = true;
-
+    
     let savedTab = 'lessonsContainer';
     let savedStack = '[]';
-
+    
     try { savedTab = sessionStorage.getItem('enjaz_active_tab') || 'lessonsContainer'; } catch(e) {}
     try { savedStack = sessionStorage.getItem('enjaz_app_stack') || '[]'; } catch(e) {}
-
+    
     document.querySelectorAll('.app-tab').forEach(t => t.classList.add('hidden'));
     const tab = document.getElementById(savedTab);
     if (tab) tab.classList.remove('hidden');
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('nav-active'));
     const btn = document.getElementById('nav-'+savedTab);
     if (btn) btn.classList.add('nav-active');
-
+    
+    if (savedTab === 'libraryContainer') loadLibrary();
+    if (savedTab === 'savedContainer') renderBookmarks();
+    
     try {
       const stack = JSON.parse(savedStack);
       if (Array.isArray(stack) && stack.length > 0) {
-        appStack = stack;
+        appStack = stack.slice();
         navLevel = stack.length;
-        history.replaceState({ level: navLevel }, '');
         
         const last = stack[stack.length - 1];
+        
         if (last.name === 'lessonFiles' && last.data?.lessonId) {
           openLesson(last.data.lessonId, true);
         } else if (last.name === 'packagesScreen') {
@@ -1043,12 +1634,14 @@
         } else if (last.name === 'viewer' && stack.length >= 2) {
           const prev = stack[stack.length - 2];
           if (prev.name === 'lessonFiles' && prev.data?.lessonId) {
-            appStack.pop(); navLevel--;
+            appStack = stack.slice(0, stack.length - 1);
+            navLevel = appStack.length;
             openLesson(prev.data.lessonId, true);
           }
         }
       }
-    } catch(e) {}
+      try { history.replaceState({ level: navLevel }, ''); } catch(e) {}
+    } catch(e) { console.warn('restoreState error:', e); }
   }
 
   function restoreSoundState() {
@@ -1063,21 +1656,15 @@
 
   window.onload = function() {
     if (localStorage.getItem('enjaz_theme') === 'dark') { document.documentElement.classList.add('dark'); document.getElementById('themeIcon').className = 'fas fa-sun text-lg'; }
-    
-    try { history.replaceState({ level: 0 }, ''); } catch (e) {}
-    
     loadCart();
+    loadGuestPurchases();
     restoreSoundState();
     window.loadAppLessons(); 
     window.loadAppExams(); 
     window.loadAppSettings(); 
     window.loadSlider();
-    
-    setTimeout(() => {
-      if(!stateRestored) restoreState();
-    }, 1500);
-    
-    setTimeout(hideSplash, 2500); 
+    setTimeout(() => { if(!stateRestored) restoreState(); }, 1500);
+    setTimeout(hideSplash, 3000);
   };
 </script>
 <style>
@@ -1090,6 +1677,10 @@
     overscroll-behavior: none; 
     -webkit-overflow-scrolling: touch;
   }
+  body { padding: 16px; }
+  @media (max-width: 768px) {
+    body { padding: 10px; }
+  }
   .dark body { background-color: #0f172a; }
   ::-webkit-scrollbar { width: 0px; }
   .nav-btn, .nav-btn i, .nav-btn span { color: #000000; transition: color .3s ease, transform .3s ease; }
@@ -1100,13 +1691,21 @@
   .watermark { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(-45deg); font-size: 3rem; font-weight: bold; color: rgba(0, 0, 0, 0.1); pointer-events: none; z-index: 10; white-space: nowrap; }
   .dark .watermark { color: rgba(255, 255, 255, 0.1); }
   .ctrl-btn { width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border-radius: 12px; }
-  
   .marquee-container { overflow: hidden; white-space: nowrap; border: 2px solid #1e293b !important; border-radius: 0.75rem; position: relative; height: 2.5rem; }
-  .marquee-text { position: absolute; right: 100%; top: 0; bottom: 0; display: flex; align-items: center; animation: marquee linear infinite; }
-  @keyframes marquee { 0% { right: 100%; } 100% { right: -100%; } }
-  
+  .marquee-text { position: absolute; left: 0; top: 0; bottom: 0; display: flex; align-items: center; white-space: nowrap; will-change: transform; }
   .card-hover { transition: transform 0.2s ease, box-shadow 0.2s ease; }
   .card-hover:hover { transform: translateY(-4px) scale(1.02); box-shadow: 0 15px 25px -5px rgba(0,0,0,0.15); }
+  
+  @media (prefers-reduced-motion: reduce) {
+    .marquee-text { animation: none !important; transform: translateX(0) !important; }
+    .card-hover, .card-hover:hover { transition: none !important; transform: none !important; box-shadow: none !important; }
+    .animate-pulse, .animate-spin { animation: none !important; }
+    * { scroll-behavior: auto !important; }
+  }
+  
+  button:focus-visible, [role="button"]:focus-visible, input:focus-visible, a:focus-visible {
+    outline: 2px solid #4f46e5; outline-offset: 2px;
+  }
 </style>
 </head>
 <body class="text-gray-800 dark:text-gray-200 flex justify-center">
@@ -1116,15 +1715,27 @@
     <p class="text-white font-bold text-lg">جاري تحضير ملف PDF...</p>
   </div>
 
+  <div id="successPopup" class="fixed inset-0 z-[95] bg-black/60 hidden justify-center items-center p-4 backdrop-blur-sm">
+    <div id="successPopupInner" class="bg-white dark:bg-slate-800 rounded-3xl p-8 max-w-sm w-full text-center shadow-2xl transform scale-90 transition-transform duration-300">
+      <div class="w-20 h-20 mx-auto bg-gradient-to-br from-emerald-400 to-emerald-600 rounded-full flex items-center justify-center mb-4 shadow-lg">
+        <i class="fas fa-check text-4xl text-white"></i>
+      </div>
+      <h3 id="successPopupTitle" class="text-2xl font-extrabold text-emerald-600 dark:text-emerald-400 mb-2">🎉 تم التفعيل بنجاح!</h3>
+      <p id="successPopupMsg" class="text-gray-600 dark:text-gray-300 text-sm mb-4">جاري نقلك إلى مكتبتك...</p>
+      <div class="w-full bg-gray-200 dark:bg-slate-700 rounded-full h-1.5 overflow-hidden">
+        <div id="successPopupProgress" class="bg-gradient-to-r from-emerald-400 to-emerald-600 h-full rounded-full transition-all duration-[1800ms]" style="width: 0%"></div>
+      </div>
+    </div>
+  </div>
+
   <div id="singleBuyModal" class="fixed inset-0 z-[80] bg-black/50 hidden justify-center items-center p-4 backdrop-blur-sm">
     <div class="bg-white dark:bg-slate-800 rounded-3xl p-6 max-w-xs w-full text-center shadow-2xl">
       <div class="w-16 h-16 mx-auto bg-amber-100 dark:bg-amber-900/40 rounded-full flex items-center justify-center mb-4"><i class="fas fa-lock text-3xl text-amber-500"></i></div>
       <h3 class="text-lg font-bold text-gray-800 dark:text-white mb-1">درس مدفوع</h3>
-      <p id="singleBuyFileName" class="text-gray-500 dark:text-gray-400 mb-4 text-sm truncate"></p>
-      
+      <p id="singleBuyFileName" class="text-gray-500 dark:text-gray-400 mb-2 text-sm truncate"></p>
+      <p class="text-xs text-emerald-600 dark:text-emerald-400 mb-4">✓ لا يحتاج تسجيل دخول</p>
       <button id="addSingleToCartBtn" class="w-full bg-blue-500 text-white p-3 rounded-xl font-bold mb-3">إضافة إلى السلة 🛒</button>
-      <button onclick="closeSingleBuyModal(); openPackagesScreen();" class="w-full bg-amber-500 text-white p-3 rounded-xl font-bold mb-3">عرض الباقات الكاملة 👑</button>
-      
+      <button onclick="goToPackagesFromSingleBuy()" class="w-full bg-amber-500 text-white p-3 rounded-xl font-bold mb-3">عرض الباقات 👑</button>
       <button onclick="closeSingleBuyModal()" class="w-full mt-2 text-gray-400 hover:text-gray-600 text-sm">رجوع</button>
     </div>
   </div>
@@ -1133,13 +1744,13 @@
     <div class="bg-white dark:bg-slate-800 rounded-3xl p-6 max-w-xs w-full text-center shadow-2xl">
       <div class="w-16 h-16 mx-auto bg-amber-100 dark:bg-amber-900/40 rounded-full flex items-center justify-center mb-4"><i class="fas fa-key text-3xl text-amber-500"></i></div>
       <h3 class="text-xl font-bold text-gray-800 dark:text-white mb-2">تفعيل الكود</h3>
-      <p class="text-gray-500 dark:text-gray-400 mb-4 text-sm">أدخل كود التفعيل لفتح المحتوى.</p>
+      <p class="text-gray-500 dark:text-gray-400 mb-4 text-sm">كود السلة لا يحتاج تسجيل دخول. كود الباقة يتطلب تسجيل الدخول.</p>
       <div id="redeemError" class="hidden bg-red-100 text-red-600 text-sm p-2 rounded-lg mb-3"></div>
       <div id="redeemSuccess" class="hidden bg-green-100 text-green-600 text-sm p-2 rounded-lg mb-3"></div>
-      <input id="redeemCodeInput" type="text" placeholder="أدخل الكود هنا" class="w-full p-3 mb-3 text-center bg-gray-100 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl focus:outline-none focus:border-indigo-500">
+      <input id="redeemCodeInput" type="text" placeholder="أدخل الكود" class="w-full p-3 mb-3 text-center bg-gray-100 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl focus:outline-none focus:border-indigo-500 uppercase" autocomplete="off" aria-label="كود التفعيل">
       <button onclick="redeemCode()" class="w-full bg-indigo-600 text-white p-3 rounded-xl font-bold mb-3">تفعيل</button>
       <div class="border-t border-gray-100 dark:border-slate-700 pt-4 mt-2">
-        <a href="https://chat.whatsapp.com/HI042GjVcQRBh7YBDZrb5m" target="_blank" class="flex items-center justify-center gap-2 bg-green-500 text-white p-3 rounded-xl font-bold">
+        <a href="https://wa.me/963993865879" target="_blank" class="flex items-center justify-center gap-2 bg-green-500 text-white p-3 rounded-xl font-bold">
           <i class="fab fa-whatsapp text-xl"></i> الحصول على كود
         </a>
       </div>
@@ -1147,18 +1758,21 @@
     </div>
   </div>
 
-  <div id="authScreen" class="fixed inset-0 z-[90] bg-gradient-to-br from-indigo-800 via-blue-800 to-blue-900 hidden flex-col justify-center items-center p-6">
-    <div class="bg-white/10 backdrop-blur-xl p-8 rounded-3xl shadow-2xl w-full max-w-sm border border-white/20">
-      <button onclick="closeAuthScreen()" class="text-white mb-4 hover:bg-white/10 p-2 rounded-full"><i class="fas fa-arrow-right text-lg"></i></button>
+  <div id="authScreen" class="fixed inset-0 z-[90] bg-gradient-to-br from-indigo-800 via-blue-800 to-blue-900 hidden flex-col justify-center items-center p-6" onclick="event.stopPropagation()">
+    <div class="bg-white/10 backdrop-blur-xl p-8 rounded-3xl shadow-2xl w-full max-w-sm border border-white/20" onclick="event.stopPropagation()">
+      <button onclick="closeAuthScreen()" class="text-white mb-4 hover:bg-white/10 p-2 rounded-full" aria-label="رجوع"><i class="fas fa-arrow-right text-lg"></i></button>
       <div class="text-center text-white mb-8">
-        <img src="https://img.icons8.com/3d-fluency/96/graduation-cap.png" class="w-20 h-20 mx-auto mb-3 drop-shadow-lg">
+        <img src="https://img.icons8.com/3d-fluency/96/graduation-cap.png" class="w-20 h-20 mx-auto mb-3 drop-shadow-lg" alt="شعار">
         <h2 id="authTitle" class="text-2xl font-extrabold">تسجيل الدخول</h2>
       </div>
-      <div id="authError" class="hidden bg-red-500/20 border border-red-400 text-red-200 text-sm p-3 rounded-lg mb-4 text-center"></div>
-      <input id="authEmail" type="email" placeholder="البريد الإلكتروني" class="w-full p-3 mb-4 bg-white/10 text-white placeholder-blue-200 border border-white/20 rounded-xl focus:outline-none focus:border-white">
+      <div id="authError" class="hidden bg-red-500/20 border border-red-400 text-red-200 text-sm p-3 rounded-lg mb-4 text-center transition-all"></div>
+      <div id="authNameWrapper" class="hidden w-full mb-4">
+        <input id="authName" type="text" placeholder="الاسم الكامل" class="w-full p-3 bg-white/10 text-white placeholder-blue-200 border border-white/20 rounded-xl focus:outline-none focus:border-white" autocomplete="name" aria-label="الاسم">
+      </div>
+      <input id="authEmail" type="email" placeholder="البريد الإلكتروني" class="w-full p-3 mb-4 bg-white/10 text-white placeholder-blue-200 border border-white/20 rounded-xl focus:outline-none focus:border-white" autocomplete="email" aria-label="البريد الإلكتروني">
       <div class="relative w-full mb-6">
-        <input id="authPass" type="password" placeholder="كلمة المرور" class="w-full p-3 bg-white/10 text-white placeholder-blue-200 border border-white/20 rounded-xl focus:outline-none focus:border-white">
-        <button type="button" onclick="togglePasswordVisibility()" class="absolute left-3 top-1/2 -translate-y-1/2 text-blue-200 hover:text-white">
+        <input id="authPass" type="password" placeholder="كلمة المرور" class="w-full p-3 bg-white/10 text-white placeholder-blue-200 border border-white/20 rounded-xl focus:outline-none focus:border-white" autocomplete="current-password" aria-label="كلمة المرور">
+        <button type="button" onclick="togglePasswordVisibility()" class="absolute left-3 top-1/2 -translate-y-1/2 text-blue-200 hover:text-white" aria-label="إظهار كلمة المرور">
           <i id="passIcon" class="fas fa-eye"></i>
         </button>
       </div>
@@ -1181,37 +1795,54 @@
     <div class="absolute bottom-20 flex justify-center"><div class="w-10 h-10 border-4 border-indigo-200 border-t-white rounded-full animate-spin"></div></div>
   </div>
 
-  <div id="appFrame" class="w-full max-w-2xl relative pb-24 min-h-screen overflow-hidden">
-    <div class="absolute top-4 right-4 z-30 flex gap-2">
-      <button id="menuBtn" onclick="toggleMenu(event)" class="ctrl-btn bg-white/20 backdrop-blur-md text-white"><i class="fas fa-bars text-lg"></i></button>
-    </div>
-    <div class="absolute top-4 left-4 z-30 flex gap-2">
-      <button onclick="openCartScreen()" class="ctrl-btn bg-white/20 backdrop-blur-md text-white relative">
-        <i class="fas fa-shopping-cart text-lg"></i>
-        <span id="cartBadge" class="hidden absolute -top-1 -right-1 bg-red-500 text-white text-[10px] rounded-full h-4 w-4 flex items-center justify-center">0</span>
-      </button>
-      <button onclick="toggleTheme()" class="ctrl-btn bg-white/20 backdrop-blur-md text-white"><i id="themeIcon" class="fas fa-moon text-lg"></i></button>
-    </div>
+  <div id="appFrame" class="w-full max-w-2xl relative pb-24 min-h-screen">
 
-    <button onclick="openPackagesScreen()" class="fixed bottom-24 right-4 z-40 bg-amber-500 text-white p-4 rounded-full shadow-xl active:scale-90 transition-transform">
+    <button onclick="openPackagesScreen()" class="fixed bottom-24 right-4 z-40 bg-amber-500 text-white p-4 rounded-full shadow-xl active:scale-90 transition-transform" aria-label="الباقات">
       <i class="fas fa-crown text-xl"></i>
     </button>
 
-    <div id="socialMenu" class="hidden absolute top-16 right-4 w-60 bg-white dark:bg-slate-800 rounded-2xl shadow-2xl py-2 z-30 border border-gray-100 dark:border-slate-600">
-      <button onclick="toggleContactSub()" class="w-full flex items-center gap-3 px-4 py-3 text-gray-800 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-slate-700"><i class="fas fa-headset text-blue-500 text-xl"></i> تواصل معنا</button>
+    <div class="absolute top-4 right-4 z-30 flex gap-2">
+      <button id="menuBtn" onclick="toggleMenu(event)" class="ctrl-btn bg-white/20 backdrop-blur-md text-white border border-white/20" aria-label="القائمة">
+        <i class="fas fa-bars text-lg"></i>
+      </button>
+    </div>
+    <div class="absolute top-4 left-4 z-30 flex gap-2">
+      <button onclick="openCartScreen()" class="ctrl-btn bg-white/20 backdrop-blur-md text-white border border-white/20 relative" aria-label="سلة المشتريات">
+        <i class="fas fa-shopping-cart text-lg"></i>
+        <span id="cartBadge" class="hidden absolute -top-1 -right-1 bg-red-500 text-white text-[10px] rounded-full h-4 w-4 flex items-center justify-center">0</span>
+      </button>
+      <button onclick="toggleTheme()" class="ctrl-btn bg-white/20 backdrop-blur-md text-white border border-white/20" aria-label="تبديل الوضع">
+        <i id="themeIcon" class="fas fa-moon text-lg"></i>
+      </button>
+    </div>
+
+    <div id="socialMenu" class="hidden absolute top-16 right-4 w-64 bg-white dark:bg-slate-800 rounded-2xl shadow-2xl py-2 z-[150] border border-gray-100 dark:border-slate-600">
+      <button onclick="toggleContactSub()" class="w-full flex items-center gap-3 px-4 py-3 text-gray-800 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-slate-700">
+        <i class="fas fa-headset text-blue-500 text-xl"></i> تواصل معنا
+      </button>
       
       <div id="contactSubMenu" class="hidden pl-4 pb-2">
-        <a href="https://wa.me/963997801717" target="_blank" class="flex items-center gap-2 px-4 py-2 text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-700 rounded-lg"><i class="fab fa-whatsapp text-green-500"></i> 0997801717</a>
-        <a href="https://wa.me/963993865879" target="_blank" class="flex items-center gap-2 px-4 py-2 text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-700 rounded-lg"><i class="fab fa-whatsapp text-green-500"></i> 0993865879</a>
+        <a href="https://wa.me/963997801717" target="_blank" class="flex items-center gap-2 px-4 py-2 text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-700 rounded-lg">
+          <i class="fab fa-whatsapp text-green-500"></i> 0997801717
+        </a>
+        <a href="https://wa.me/963993865879" target="_blank" class="flex items-center gap-2 px-4 py-2 text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-700 rounded-lg">
+          <i class="fab fa-whatsapp text-green-500"></i> 0993865879
+        </a>
       </div>
 
-      <button id="soundToggleBtn" onclick="toggleSound()" class="w-full flex items-center gap-3 px-4 py-3 text-gray-800 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-slate-700"><i id="soundIcon" class="fas fa-volume-high text-amber-500 text-xl"></i> <span id="soundText">كتم الصوت</span></button>
+      <button id="soundToggleBtn" onclick="toggleSound()" class="w-full flex items-center gap-3 px-4 py-3 text-gray-800 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-slate-700">
+        <i id="soundIcon" class="fas fa-volume-high text-amber-500 text-xl"></i> 
+        <span id="soundText">كتم الصوت</span>
+      </button>
       
-      <button id="authBtnNav" class="w-full flex items-center gap-3 px-4 py-3 text-gray-800 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-slate-700"><i id="authIcon" class="fas fa-right-to-bracket text-indigo-500 text-xl"></i> <span id="authText">تسجيل الدخول</span></button>
+      <button id="authBtnNav" class="w-full flex items-center gap-3 px-4 py-3 text-gray-800 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-slate-700">
+        <i id="authIcon" class="fas fa-right-to-bracket text-indigo-500 text-xl"></i> 
+        <span id="authText">تسجيل الدخول</span>
+      </button>
       
       <div class="flex items-center justify-center gap-6 px-4 py-3 mt-2 border-t border-gray-100 dark:border-slate-700">
-        <a href="#" class="text-pink-500 text-2xl hover:scale-110 transition-transform"><i class="fab fa-instagram"></i></a>
-        <a href="#" class="text-blue-600 text-2xl hover:scale-110 transition-transform"><i class="fab fa-facebook"></i></a>
+        <a href="https://www.instagram.com/injaz.bac?igsh=dTR0YjlnZHc1OHMx" target="_blank" class="text-pink-500 text-2xl hover:scale-110 transition-transform"><i class="fab fa-instagram"></i></a>
+        <a href="https://www.facebook.com/share/19aQa6k6Vy/" target="_blank" class="text-blue-600 text-2xl hover:scale-110 transition-transform"><i class="fab fa-facebook"></i></a>
       </div>
     </div>
 
@@ -1219,15 +1850,15 @@
       <div id="headerBgLayer" class="absolute inset-0 bg-cover bg-center"></div>
       <div id="headerOverlay" class="absolute inset-0 bg-gradient-to-br from-indigo-800 via-blue-800 to-blue-900 dark:from-slate-900 dark:to-slate-800"></div>
       <div class="relative z-10 flex flex-col items-center text-center text-white pt-8">
-        <img src="https://img.icons8.com/3d-fluency/96/graduation-cap.png" class="w-24 h-24 mb-3 drop-shadow-lg">
+        <img src="https://img.icons8.com/3d-fluency/96/graduation-cap.png" class="w-24 h-24 mb-3 drop-shadow-lg" alt="شعار">
         <h1 class="text-4xl font-extrabold tracking-tight drop-shadow-md">منصة إنجاز الأكاديمية</h1>
         <p class="text-amber-300 mt-2 font-bold text-lg">البكالوريا العلمي - المنهاج السوري</p>
         <p class="text-blue-200 mt-1 font-semibold text-xl">المساعد الأكاديمي التعليمي</p>
         
         <div class="flex gap-6 mt-4">
-          <a href="#" class="text-white text-2xl hover:scale-110 transition-transform"><i class="fab fa-instagram"></i></a>
-          <a href="#" class="text-white text-2xl hover:scale-110 transition-transform"><i class="fab fa-facebook"></i></a>
-          <a href="https://chat.whatsapp.com/HI042GjVcQRBh7YBDZrb5m" target="_blank" class="text-white text-2xl hover:scale-110 transition-transform"><i class="fab fa-whatsapp"></i></a>
+          <a href="https://www.instagram.com/injaz.bac?igsh=dTR0YjlnZHc1OHMx" target="_blank" class="text-white text-2xl hover:scale-110 transition-transform" aria-label="إنستغرام"><i class="fab fa-instagram"></i></a>
+          <a href="https://www.facebook.com/share/19aQa6k6Vy/" target="_blank" class="text-white text-2xl hover:scale-110 transition-transform" aria-label="فيسبوك"><i class="fab fa-facebook"></i></a>
+          <a href="https://chat.whatsapp.com/HI042GjVcQRBh7YBDZrb5m" target="_blank" class="text-white text-2xl hover:scale-110 transition-transform" aria-label="واتساب"><i class="fab fa-whatsapp"></i></a>
         </div>
       </div>
     </header>
@@ -1252,28 +1883,46 @@
         <div class="bg-white/70 dark:bg-slate-800/70 p-2 rounded-2xl shadow-sm border mb-5">
           <div class="flex gap-2 items-center bg-slate-100/50 dark:bg-slate-900/50 rounded-xl px-4">
             <i class="fas fa-search text-gray-400"></i>
-            <input id="searchInput" type="text" class="w-full p-3 bg-transparent border-none outline-none text-sm dark:text-gray-200" placeholder="ابحث عن درس..." oninput="searchLessons()">
-            <button id="searchClearBtn" onclick="clearSearch()" class="hidden text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"><i class="fas fa-times-circle"></i></button>
+            <input id="searchInput" type="text" class="w-full p-3 bg-transparent border-none outline-none text-sm dark:text-gray-200" placeholder="ابحث عن درس..." oninput="searchLessons()" aria-label="بحث">
+            <button id="searchClearBtn" onclick="clearSearch()" class="hidden text-gray-400 hover:text-gray-600 dark:hover:text-gray-200" aria-label="مسح"><i class="fas fa-times-circle"></i></button>
           </div>
         </div>
         <div id="gridView">
           <h2 class="text-md font-bold text-gray-600 dark:text-gray-300 mb-3 flex items-center gap-2"><i class="fas fa-th-large text-indigo-500"></i> اختر المادة</h2>
           <div id="lessonsGrid" class="grid grid-cols-2 gap-4"></div>
-          
-          <div onclick="playClickSound(); openPackagesScreen();" class="card-hover mt-6 bg-gradient-to-l from-indigo-600 to-purple-600 text-white p-5 rounded-2xl shadow-lg flex items-center justify-between cursor-pointer active:scale-95 transition-transform">
-            <div class="flex flex-col">
-              <h3 class="font-bold text-lg">تفضل بالاطلاع على الباقات والعروض المميزة</h3>
-              <p class="text-indigo-200 text-sm mt-1">اشترك الآن لفتح جميع الدروس بلا حدود</p>
+
+          <div class="grid grid-cols-2 gap-4 mt-4">
+            <div onclick="playClickSound(); showAppTab('examsContainer')" class="card-hover bg-gradient-to-br from-indigo-500 to-violet-700 p-4 rounded-3xl shadow-lg cursor-pointer active:scale-95 transition-transform duration-150 h-40 flex flex-col justify-between text-white relative overflow-hidden" role="button" tabindex="0" aria-label="نماذج امتحانية و تدريب">
+              <div class="absolute top-0 left-0 w-24 h-24 bg-white/10 rounded-full -mt-10 -ml-10"></div>
+              <div class="flex justify-between items-start relative z-10">
+                <i class="fas fa-file-pen text-3xl opacity-90" aria-hidden="true"></i>
+                <span class="bg-white/25 backdrop-blur-sm px-2 py-1 rounded-full text-xs font-bold">جديد</span>
+              </div>
+              <h3 class="text-lg font-extrabold leading-tight relative z-10">نماذج امتحانية و تدريب</h3>
             </div>
-            <i class="fas fa-arrow-left text-2xl"></i>
+            <div onclick="playClickSound(); showAppTab('libraryContainer')" class="card-hover bg-gradient-to-br from-teal-500 to-cyan-700 p-4 rounded-3xl shadow-lg cursor-pointer active:scale-95 transition-transform duration-150 h-40 flex flex-col justify-between text-white relative overflow-hidden" role="button" tabindex="0" aria-label="ملفات دعم و تقوية">
+              <div class="absolute top-0 left-0 w-24 h-24 bg-white/10 rounded-full -mt-10 -ml-10"></div>
+              <div class="flex justify-between items-start relative z-10">
+                <i class="fas fa-book-open-reader text-3xl opacity-90" aria-hidden="true"></i>
+                <span class="bg-white/25 backdrop-blur-sm px-2 py-1 rounded-full text-xs font-bold">دعم</span>
+              </div>
+              <h3 class="text-lg font-extrabold leading-tight relative z-10">ملفات دعم و تقوية</h3>
+            </div>
           </div>
 
+          <div onclick="playClickSound(); openPackagesScreen();" class="card-hover mt-6 bg-gradient-to-l from-orange-500 via-amber-500 to-yellow-400 text-white p-5 rounded-2xl shadow-lg flex items-center justify-between cursor-pointer active:scale-95 transition-transform" role="button" tabindex="0">
+            <div class="flex flex-col">
+              <h3 class="font-bold text-lg drop-shadow-sm">تفضل بالاطلاع على الباقات والعروض المميزة</h3>
+              <p class="text-amber-50 text-sm mt-1">اشترك الآن لفتح جميع الدروس بلا حدود</p>
+            </div>
+            <i class="fas fa-arrow-left text-2xl drop-shadow-sm"></i>
+          </div>
           <div id="sliderContainer" class="mt-8 hidden">
-            <div class="rounded-2xl overflow-hidden shadow-lg bg-gray-200 dark:bg-slate-800 w-full" style="aspect-ratio: 16/9;"><img id="sliderImg" src="" class="w-full h-full object-cover transition-all duration-500"></div>
+            <div class="rounded-2xl overflow-hidden shadow-lg bg-gray-200 dark:bg-slate-800 w-full" style="aspect-ratio: 16/9;"><img id="sliderImg" src="" class="w-full h-full object-cover transition-all duration-500" alt="سلايدر"></div>
           </div>
         </div>
         <div id="listView" style="display:none;">
-          <div class="flex items-center gap-3 mb-4"><button onclick="showGridView()" class="bg-white/70 dark:bg-slate-800 p-2 rounded-xl shadow-sm border text-gray-600"><i class="fas fa-arrow-right"></i></button><h2 id="listTitle" class="text-lg font-bold text-gray-800 dark:text-gray-200">المادة</h2></div>
+          <div class="flex items-center gap-3 mb-4"><button onclick="showGridView()" class="bg-white/70 dark:bg-slate-800 p-2 rounded-xl shadow-sm border text-gray-600" aria-label="رجوع"><i class="fas fa-arrow-right"></i></button><h2 id="listTitle" class="text-lg font-bold text-gray-800 dark:text-gray-200">المادة</h2></div>
           <div id="lessonsList"></div>
         </div>
       </div>
@@ -1288,10 +1937,10 @@
     </div>
   </div>
 
-  <div id="packagesScreen" class="fixed inset-0 bg-slate-50 dark:bg-slate-900 z-[50] flex-col w-full pb-24" style="display:none;">
-    <div class="relative bg-gradient-to-br from-amber-500 to-orange-600 dark:from-slate-900 dark:to-slate-800 pt-10 pb-12 px-5 rounded-b-[2rem] shadow-xl overflow-hidden w-full">
-      <button onclick="closePackagesScreen()" class="absolute top-4 right-4 bg-white/20 p-2 rounded-full"><i class="fas fa-arrow-right text-lg text-white"></i></button>
-      <div class="relative z-10 flex flex-col items-center text-center text-white">
+  <div id="packagesScreen" class="fixed inset-0 mx-auto max-w-2xl bg-slate-50 dark:bg-slate-900 z-[50] flex-col w-full pb-24" style="display:none;">
+    <div class="relative bg-gradient-to-br from-amber-500 to-orange-600 dark:from-slate-900 dark:to-slate-800 pt-16 pb-12 px-5 rounded-b-[2rem] shadow-xl overflow-hidden w-full">
+      <button onclick="closePackagesScreen()" class="absolute top-4 right-4 bg-white/20 p-2 rounded-full z-10" aria-label="رجوع"><i class="fas fa-arrow-right text-lg text-white"></i></button>
+      <div class="relative z-10 flex flex-col items-center text-center text-white pt-6">
         <h1 class="text-2xl font-extrabold">الاشتراكات والباقات</h1>
         <p class="text-amber-100 mt-1 font-semibold text-sm">اختر الباقة المناسبة لك</p>
       </div>
@@ -1299,22 +1948,23 @@
     <div id="packagesContainer" class="p-4 flex-1 overflow-y-auto w-full"></div>
   </div>
 
-  <div id="cartScreen" class="fixed inset-0 bg-slate-50 dark:bg-slate-900 z-[50] flex-col w-full pb-24" style="display:none;">
-    <div class="relative bg-gradient-to-br from-indigo-800 via-blue-800 to-blue-900 dark:from-slate-900 dark:to-slate-800 pt-10 pb-12 px-5 rounded-b-[2rem] shadow-xl overflow-hidden w-full">
-      <button onclick="closeCartScreen()" class="absolute top-4 right-4 bg-white/20 p-2 rounded-full"><i class="fas fa-arrow-right text-lg text-white"></i></button>
-      <div class="relative z-10 flex flex-col items-center text-center text-white">
+  <div id="cartScreen" class="fixed inset-0 mx-auto max-w-2xl bg-slate-50 dark:bg-slate-900 z-[50] flex-col w-full pb-24" style="display:none;">
+    <div class="relative bg-gradient-to-br from-indigo-800 via-blue-800 to-blue-900 dark:from-slate-900 dark:to-slate-800 pt-16 pb-12 px-5 rounded-b-[2rem] shadow-xl overflow-hidden w-full">
+      <button onclick="closeCartScreen()" class="absolute top-4 right-4 bg-white/20 p-2 rounded-full z-10" aria-label="رجوع"><i class="fas fa-arrow-right text-lg text-white"></i></button>
+      <div class="relative z-10 flex flex-col items-center text-center text-white pt-6">
         <h1 class="text-2xl font-extrabold">سلة المشتريات</h1>
+        <p class="text-blue-200 mt-1 text-xs">✓ لا يحتاج تسجيل دخول</p>
       </div>
     </div>
     <div id="cartList" class="p-4 flex-1 overflow-y-auto w-full"></div>
   </div>
 
-  <div id="lessonFilesScreen" class="fixed inset-0 bg-slate-50 dark:bg-slate-900 z-[50] flex-col w-full pb-24" style="display:none;">
-    <div class="relative bg-gradient-to-br from-indigo-800 via-blue-800 to-blue-900 dark:from-slate-900 dark:to-slate-800 pt-10 pb-12 px-5 rounded-b-[2rem] shadow-xl overflow-hidden w-full">
+  <div id="lessonFilesScreen" class="fixed inset-0 mx-auto max-w-2xl bg-slate-50 dark:bg-slate-900 z-[50] flex-col w-full pb-24" style="display:none;">
+    <div class="relative bg-gradient-to-br from-indigo-800 via-blue-800 to-blue-900 dark:from-slate-900 dark:to-slate-800 pt-16 pb-12 px-5 rounded-b-[2rem] shadow-xl overflow-hidden w-full">
       <div id="headerBgLayerFiles" class="absolute inset-0 bg-cover bg-center"></div>
       <div id="headerBgLayerFilesOverlay" class="absolute inset-0 bg-gradient-to-br from-indigo-800 via-blue-800 to-blue-900 dark:from-slate-900 dark:to-slate-800"></div>
-      <div class="relative z-10 flex flex-col items-center text-center text-white">
-        <button onclick="closeLessonFiles()" class="absolute top-4 right-4 bg-white/20 p-2 rounded-full"><i class="fas fa-arrow-right text-lg"></i></button>
+      <button onclick="closeLessonFiles()" class="absolute top-4 right-4 bg-white/20 p-2 rounded-full z-10" aria-label="رجوع"><i class="fas fa-arrow-right text-lg text-white"></i></button>
+      <div class="relative z-10 flex flex-col items-center text-center text-white pt-6">
         <h1 class="text-2xl font-extrabold">ملحقات الدرس</h1>
         <p id="filesLessonTitle" class="text-blue-200 mt-1 font-semibold text-md truncate w-full px-4">جاري التحميل...</p>
       </div>
@@ -1322,25 +1972,24 @@
     <div class="p-4 flex-1 overflow-y-auto w-full" id="filesContainer"></div>
   </div>
 
-  <!-- إصلاح z-index: رفعها إلى 80 لتغطي شريط التنقل -->
-  <div id="viewerScreen" class="fixed inset-0 bg-white dark:bg-slate-900 z-[80] flex-col relative w-full" style="display:none;">
+  <div id="viewerScreen" class="fixed inset-0 mx-auto max-w-2xl bg-white dark:bg-slate-900 z-[80] flex-col relative w-full" style="display:none;">
     <div class="watermark">منصة إنجاز الأكاديمية</div>
     <div class="sticky top-0 z-20 p-3 bg-white/95 dark:bg-slate-800/95 backdrop-blur-sm shadow-sm border-b border-gray-100 dark:border-slate-700 w-full">
       <div class="flex justify-between items-center bg-slate-100 dark:bg-slate-700 p-2 rounded-2xl gap-2">
-        <button onclick="closeLesson()" class="flex items-center gap-2 bg-white dark:bg-slate-800 text-gray-700 dark:text-gray-200 font-bold px-4 py-2 rounded-xl shadow-sm flex-shrink-0"><i class="fas fa-arrow-right"></i> رجوع</button>
+        <button onclick="closeLesson()" class="flex items-center gap-2 bg-white dark:bg-slate-800 text-gray-700 dark:text-gray-200 font-bold px-4 py-2 rounded-xl shadow-sm flex-shrink-0" aria-label="رجوع"><i class="fas fa-arrow-right"></i> رجوع</button>
         <h2 id="lessonTitle" class="font-bold text-sm truncate flex-1 text-center px-2 text-gray-800 dark:text-gray-200">عنوان الملف</h2>
-        <button onclick="printCurrentView()" class="flex items-center gap-2 bg-indigo-600 text-white font-bold px-4 py-2 rounded-xl shadow-sm flex-shrink-0"><i class="fas fa-file-pdf"></i> حفظ PDF</button>
+        <button onclick="printCurrentView()" class="flex items-center gap-2 bg-indigo-600 text-white font-bold px-4 py-2 rounded-xl shadow-sm flex-shrink-0" aria-label="حفظ PDF"><i class="fas fa-file-pdf"></i> حفظ PDF</button>
       </div>
     </div>
-    <div class="flex-1 overflow-hidden bg-white dark:bg-slate-900 relative z-10 w-full"><iframe id="viewerFrame" class="w-full h-full" style="border: none; height: calc(100vh - 75px);"></iframe></div>
+    <div class="flex-1 overflow-hidden bg-white dark:bg-slate-900 relative z-10 w-full"><iframe id="viewerFrame" class="w-full h-full" sandbox="allow-scripts allow-same-origin allow-popups allow-forms allow-modals allow-downloads" style="border: none; height: calc(100vh - 75px);"></iframe></div>
   </div>
 
   <nav id="navBar" class="fixed bottom-0 left-0 right-0 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md shadow-2xl border-t border-gray-100 dark:border-slate-800 z-[70] max-w-2xl mx-auto" style="border-radius: 1rem;">
     <div class="flex justify-around items-center h-16">
-      <button id="nav-lessonsContainer" onclick="showAppTab('lessonsContainer')" class="nav-btn nav-active flex flex-col items-center justify-center w-full h-full"><i class="fas fa-th-large text-xl"></i><span class="mt-1">الرئيسية</span></button>
-      <button id="nav-libraryContainer" onclick="showAppTab('libraryContainer')" class="nav-btn flex flex-col items-center justify-center w-full h-full"><i class="fas fa-book-bookmark text-xl"></i><span class="mt-1">مكتبتي</span></button>
-      <button id="nav-savedContainer" onclick="showAppTab('savedContainer')" class="nav-btn flex flex-col items-center justify-center w-full h-full"><i class="fas fa-bookmark text-xl"></i><span class="mt-1">محفوظاتي</span></button>
-      <button id="nav-examsContainer" onclick="showAppTab('examsContainer')" class="nav-btn flex flex-col items-center justify-center w-full h-full"><i class="fas fa-star text-xl"></i><span class="mt-1">مهم جدا</span></button>
+      <button id="nav-lessonsContainer" onclick="showAppTab('lessonsContainer')" class="nav-btn nav-active flex flex-col items-center justify-center w-full h-full" aria-label="الرئيسية"><i class="fas fa-th-large text-xl"></i><span class="mt-1">الرئيسية</span></button>
+      <button id="nav-libraryContainer" onclick="showAppTab('libraryContainer')" class="nav-btn flex flex-col items-center justify-center w-full h-full" aria-label="مكتبتي"><i class="fas fa-book-bookmark text-xl"></i><span class="mt-1">مكتبتي</span></button>
+      <button id="nav-savedContainer" onclick="showAppTab('savedContainer')" class="nav-btn flex flex-col items-center justify-center w-full h-full" aria-label="محفوظاتي"><i class="fas fa-bookmark text-xl"></i><span class="mt-1">محفوظاتي</span></button>
+      <button id="nav-examsContainer" onclick="showAppTab('examsContainer')" class="nav-btn flex flex-col items-center justify-center w-full h-full" aria-label="مهم جدا"><i class="fas fa-star text-xl"></i><span class="mt-1">مهم جدا</span></button>
     </div>
   </nav>
 
