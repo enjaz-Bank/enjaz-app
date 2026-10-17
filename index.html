@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
 <title>منصة إنجاز الأكاديمية</title>
+<!-- ✅ PWA Setup -->
+<meta name="theme-color" content="#4f46e5">
+<link rel="manifest" href="./manifest.json">
 
 <meta http-equiv="Content-Security-Policy" content="default-src * 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https:; frame-src * 'self' https: data: blob:; img-src * 'self' data: blob: https:; media-src * 'self' data: blob: https:; connect-src * https: wss:;">
 
@@ -1992,7 +1995,7 @@
     }
   }
 
-  window.onload = function() {
+    window.onload = function() {
     if (localStorage.getItem('enjaz_theme') === 'dark') { document.documentElement.classList.add('dark'); document.getElementById('themeIcon').className = 'fas fa-sun text-lg'; }
     loadCart();
     loadGuestPurchases();
@@ -2003,6 +2006,13 @@
     window.loadSlider();
     setTimeout(() => { if(!stateRestored) restoreState(); }, 1500);
     setTimeout(hideSplash, 3000);
+
+    // ✅ تسجيل Service Worker للـ PWA
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('./sw.js')
+        .then(reg => console.log('✅ PWA Service Worker registered', reg.scope))
+        .catch(err => console.warn('⚠️ PWA Service Worker failed', err));
+    }
   };
 </script>
 <style>
