@@ -1,0 +1,2203 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>لوحة تحكم - منصة إنجاز</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
+  import { getFirestore, collection, addDoc, onSnapshot, deleteDoc, doc, updateDoc, setDoc, getDoc, query, where, getDocs, writeBatch } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
+  import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyAex1r9HHheqUgmjz6tbyLuob3yA4JXGfk",
+    authDomain: "enjaz-academy-6c4ee.firebaseapp.com",
+    projectId: "enjaz-academy-6c4ee",
+    storageBucket: "enjaz-academy-6c4ee.firebasestorage.app",
+    messagingSenderId: "856108513861",
+    appId: "1:856108513861:web:e69831467ff78318a1812c",
+    measurementId: "G-62MCQFTRQJ"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+  const auth = getAuth(app);
+  setPersistence(auth, browserLocalPersistence).catch(e => console.warn('persistence:', e));
+  
+  const ADMIN_UID = "NuG7U6FJwDc7ZTlogojV6mU0u6s2"; 
+  let currentLessonId = null;
+  let currentCodeType = 'package';
+  const allSubjects = ["رياضيات", "الفيزياء", "الكيمياء", "العلوم", "اللغة العربية", "اللغة الانكليزية", "اللغةالفرنسية", "التربية الاسلامية"];
+
+  let allFilesCache = [];
+  let currentEditingPkg = null;
+  let selectedExtraFiles = new Set();
+  let savedExtraFiles = { pkg1: [], pkg2: [], pkg3: [] };
+  let currentEditingExtraFile = null; 
+
+  function normalizeSubject(s) {
+    return (s || '').toString().trim().replace(/\s+/g, ' ')
+      .replace(/[إأآا]/g, 'ا').replace(/ى/g, 'ي').replace(/ة/g, 'ه');
+  }
+  window.normalizeSubject = normalizeSubject;
+
+  let adminInitialized = false;
+
+  // ============ 🎨 دوال مزامنة الألوان ============
+  window.syncColorToHex = function(colorId) {
+    const colorInput = document.getElementById(colorId);
+    const hexInput = document.getElementById(colorId + 'Hex');
+    if (colorInput && hexInput) hexInput.value = colorInput.value;
+  };
+
+  window.syncHexToColor = function(colorId) {
+    const colorInput = document.getElementById(colorId);
+    const hexInput = document.getElementById(colorId + 'Hex');
+    if (!colorInput || !hexInput) return;
+    let val = (hexInput.value || '').trim();
+    if (!val.startsWith('#')) val = '#' + val;
+    if (/^#[0-9A-Fa-f]{6}$/.test(val)) {
+      colorInput.value = val.toLowerCase();
+      hexInput.value = val.toLowerCase();
+    }
+  };
+
+  // ============ Auth ============
+  onAuthStateChanged(auth, (user) => {
+    const loading = document.getElementById('loadingAuth');
+    if (loading) loading.style.display = 'none';
+    
+    if (user && user.uid === ADMIN_UID) {
+      document.getElementById('loginOverlay').classList.add('hidden');
+      document.getElementById('mainApp').classList.remove('hidden');
+      if (!adminInitialized) {
+        adminInitialized = true;
+        initAdmin();
+      }
+    } else {
+      if (user && user.uid !== ADMIN_UID) {
+        signOut(auth).catch(() => {});
+        alert("هذا الحساب ليس لديه صلاحيات للدخول إلى لوحة التحكم.");
+      }
+      document.getElementById('loginOverlay').classList.remove('hidden');
+      document.getElementById('mainApp').classList.add('hidden');
+      adminInitialized = false;
+    }
+  });
+
+  window.adminLogin = async function() {
+    const email = document.getElementById('loginUser').value;
+    const pass = document.getElementById('loginPass').value;
+    if (!email || !pass) { alert("الرجاء إدخال البريد وكلمة المرور"); return; }
+    try {
+      await signInWithEmailAndPassword(auth, email, pass);
+    } catch(e) { 
+      alert("خطأ في تسجيل الدخول: " + e.message); 
+    }
+  }
+
+  window.adminLogout = function() { signOut(auth); }
+
+  function initAdmin() {
+    initFileInputs();
+    window.loadLessons(); 
+    window.loadAds(); 
+    window.loadExams(); 
+    window.loadSettings(); 
+    window.loadSlider();
+    window.loadStudents(); 
+    window.loadCodes(); 
+    window.loadPackagesSettings(); 
+    window.loadPackagesForCodes();
+    window.selectCodeType('package');
+    loadAllFilesForExtraSelection();
+    window.loadExtraFiles('training');
+    window.loadExtraFiles('support');
+    window.loadRecoveryCodes();
+  }
+
+  window.compressImage = function(file) {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = e => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          let width = img.width, height = img.height;
+          if (width > 800) { height = Math.round((height *= 800 / width)); width = 800; }
+          canvas.width = width; canvas.height = height;
+          canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+          resolve(canvas.toDataURL('image/jpeg', 0.7));
+        };
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  window.readFileAsBase64 = function(file) {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = e => resolve(e.target.result);
+      reader.readAsDataURL(file);
+    });
+  };
+
+  window.showTab = function(tabName) {
+    document.querySelectorAll('.tab-content').forEach(t => t.classList.add('hidden'));
+    document.getElementById(tabName).classList.remove('hidden');
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('bg-indigo-900', 'text-white'));
+    document.getElementById('btn-'+tabName).classList.add('bg-indigo-900', 'text-white');
+    
+    if (tabName === 'maintenance') loadMaintenanceStats();
+  };
+
+  // ============ 🆕 الملفات الإضافية ============
+  window.addExtraFile = async function(category) {
+    const btn = event?.target;
+    if (btn) { btn.disabled = true; btn.innerText = "جاري الحفظ..."; }
+    
+    const nameEl = document.getElementById(`${category}FileName`);
+    const inputEl = document.getElementById(`${category}FileInput`);
+    const linkEl = document.getElementById(`${category}FileLink`);
+    const priceEl = document.getElementById(`${category}FilePrice`);
+    const premiumEl = document.getElementById(`${category}FilePremium`);
+    
+    const fileName = (nameEl?.value || '').trim();
+    const fileInput = inputEl?.files[0];
+    const fileLink = (linkEl?.value || '').trim();
+    const price = (priceEl?.value || '').trim();
+    const isPremium = premiumEl?.checked || false;
+    
+    if (!fileName) {
+      alert("الرجاء إدخال اسم الملف");
+      if (btn) { btn.disabled = false; btn.innerText = "حفظ"; }
+      return;
+    }
+    if (!fileInput && !fileLink) {
+      alert("الرجاء اختيار ملف أو إدخال رابط");
+      if (btn) { btn.disabled = false; btn.innerText = "حفظ"; }
+      return;
+    }
+    if (isPremium && !price) {
+      alert("الرجاء إدخال سعر الملف المدفوع");
+      if (btn) { btn.disabled = false; btn.innerText = "حفظ"; }
+      return;
+    }
+    
+    try {
+      let fileData = "";
+      let isPdf = false;
+      let isExternal = false;
+      
+      if (fileInput) {
+        fileData = await readFileAsBase64(fileInput);
+        isPdf = fileInput.type === 'application/pdf';
+        if (fileData.length > 900000) {
+          alert("حجم الملف كبير جداً. الحد الأقصى ~700KB");
+          if (btn) { btn.disabled = false; btn.innerText = "حفظ"; }
+          return;
+        }
+      } else {
+        fileData = fileLink;
+        isExternal = true;
+      }
+      
+      await addDoc(collection(db, "extraFiles"), {
+        category,
+        fileName,
+        fileData,
+        isPdf,
+        isExternal,
+        isPremium,
+        price: isPremium ? price : "",
+        createdAt: new Date()
+      });
+      
+      alert("تم حفظ الملف بنجاح ✅");
+      
+      if (nameEl) nameEl.value = '';
+      if (inputEl) inputEl.value = '';
+      if (linkEl) linkEl.value = '';
+      if (priceEl) priceEl.value = '';
+      if (premiumEl) premiumEl.checked = false;
+      
+    } catch(e) {
+      alert("خطأ: " + e.message);
+    }
+    if (btn) { btn.disabled = false; btn.innerText = "حفظ"; }
+  };
+
+  window.loadExtraFiles = function(category) {
+    const q = query(collection(db, "extraFiles"), where("category", "==", category));
+    onSnapshot(q, (snap) => {
+      const c = document.getElementById(`${category}FilesList`);
+      if (!c) return;
+      c.innerHTML = "";
+      
+      if (snap.empty) {
+        c.innerHTML = "<p class='text-gray-500 text-center py-4'>لا توجد ملفات بعد.</p>";
+        return;
+      }
+      
+      let filesArr = [];
+      snap.forEach(d => filesArr.push({ id: d.id, ...d.data() }));
+      filesArr.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+      
+      filesArr.forEach((f, index) => {
+        const premiumBadge = f.isPremium 
+          ? `<span class="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded font-bold">💰 مدفوع ${f.price ? `- ${f.price}` : ''}</span>` 
+          : `<span class="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded font-bold">مجاني</span>`;
+        const typeBadge = f.isExternal 
+          ? `<span class="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded font-bold">رابط خارجي</span>` 
+          : (f.isPdf ? `<span class="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded font-bold">PDF</span>` : `<span class="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded font-bold">HTML</span>`);
+        
+        c.innerHTML += `
+          <div class="bg-white p-4 rounded-lg shadow border mb-3 flex justify-between items-center gap-2 flex-wrap">
+            <div class="flex-1 min-w-0 flex items-center gap-3">
+              <span class="w-8 h-8 bg-indigo-100 text-indigo-700 rounded-full flex items-center justify-center font-bold text-sm flex-shrink-0">${index + 1}</span>
+              <div class="min-w-0">
+                <h4 class="font-bold text-gray-800 truncate">${f.fileName}</h4>
+                <div class="flex gap-2 mt-1 flex-wrap">${premiumBadge} ${typeBadge}</div>
+              </div>
+            </div>
+            <div class="flex gap-2 items-center flex-wrap">
+              <button onclick="openExtraFileEdit('${f.id}')" class="bg-blue-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-blue-700 transition-colors">✏️ إدارة</button>
+              <button onclick="deleteItem('extraFiles','${f.id}')" class="bg-red-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-red-700 transition-colors">🗑️ حذف</button>
+            </div>
+          </div>
+        `;
+      });
+    });
+  };
+
+  window.openExtraFileEdit = async function(fileId) {
+    try {
+      const snap = await getDoc(doc(db, "extraFiles", fileId));
+      if (!snap.exists()) { alert("الملف غير موجود"); return; }
+      const f = snap.data();
+      currentEditingExtraFile = { id: fileId, ...f };
+      
+      document.getElementById('editExtraFileName').value = f.fileName || '';
+      document.getElementById('editExtraFilePrice').value = f.price || '';
+      document.getElementById('editExtraFilePremium').checked = f.isPremium === true;
+      document.getElementById('editExtraFilePremiumPrice').style.display = f.isPremium ? 'block' : 'none';
+      
+      document.getElementById('extraFileEditModal').classList.remove('hidden');
+      document.getElementById('extraFileEditModal').classList.add('flex');
+    } catch(e) { alert("خطأ: " + e.message); }
+  };
+
+  window.closeExtraFileEditModal = function() {
+    document.getElementById('extraFileEditModal').classList.add('hidden');
+    document.getElementById('extraFileEditModal').classList.remove('flex');
+    currentEditingExtraFile = null;
+  };
+
+  window.toggleEditPremiumPrice = function() {
+    const isPremium = document.getElementById('editExtraFilePremium').checked;
+    document.getElementById('editExtraFilePremiumPrice').style.display = isPremium ? 'block' : 'none';
+  };
+
+  window.saveExtraFileEdit = async function() {
+    if (!currentEditingExtraFile) return;
+    const btn = event?.target || document.querySelector('#extraFileEditModal button.bg-indigo-600');
+    if (btn) { btn.disabled = true; btn.innerText = "جاري الحفظ..."; }
+    
+    const newName = document.getElementById('editExtraFileName').value.trim();
+    const newPrice = document.getElementById('editExtraFilePrice').value.trim();
+    const newPremium = document.getElementById('editExtraFilePremium').checked;
+    
+    if (!newName) { 
+      alert("الرجاء إدخال اسم الملف"); 
+      if (btn) { btn.disabled = false; btn.innerText = "💾 حفظ"; }
+      return; 
+    }
+    if (newPremium && !newPrice) { 
+      alert("الرجاء إدخال السعر للملف المدفوع"); 
+      if (btn) { btn.disabled = false; btn.innerText = "💾 حفظ"; }
+      return; 
+    }
+    
+    try {
+      await updateDoc(doc(db, "extraFiles", currentEditingExtraFile.id), {
+        fileName: newName,
+        price: newPremium ? newPrice : "",
+        isPremium: newPremium
+      });
+      alert("✅ تم حفظ التعديلات");
+      closeExtraFileEditModal();
+    } catch(e) { 
+      alert("خطأ: " + e.message); 
+    } finally {
+      if (btn) { btn.disabled = false; btn.innerText = "💾 حفظ"; }
+    }
+  };
+
+  // ============ 🆕 أكواد الاسترجاع ============
+  window.loadRecoveryCodes = async function() {
+    onSnapshot(collection(db, "recoveryCodes"), async (snap) => {
+      const c = document.getElementById('recoveryCodesList');
+      if (!c) return;
+      c.innerHTML = "";
+      
+      if (snap.empty) {
+        c.innerHTML = "<p class='text-gray-500 text-center py-4'>لا توجد أكواد استرجاع بعد.</p>";
+        return;
+      }
+      
+      let usersMap = {};
+      try {
+        const usersSnap = await getDocs(collection(db, "users"));
+        usersSnap.forEach(u => { 
+          const data = u.data();
+          usersMap[u.id] = data.email || (data.name ? `(${data.name})` : 'زائر مجهول');
+        });
+      } catch(e) { console.warn('users fetch:', e); }
+      
+      let codesArr = [];
+      snap.forEach(d => codesArr.push({ id: d.id, ...d.data() }));
+      codesArr.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+      
+      codesArr.forEach(code => {
+        const ownerEmail = usersMap[code.uid] || `UID: ${(code.uid || '').substring(0, 10)}...`;
+        const filesCount = Array.isArray(code.purchasedFiles) ? code.purchasedFiles.length : 0;
+        const usedCount = code.usedCount || 0;
+        const createdDate = code.createdAt?.seconds 
+          ? new Date(code.createdAt.seconds * 1000).toLocaleDateString('ar-SY') 
+          : 'غير معروف';
+        
+        c.innerHTML += `
+          <div class="bg-white p-4 rounded-lg shadow border mb-3">
+            <div class="flex justify-between items-start gap-2 flex-wrap">
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 flex-wrap mb-2">
+                  <code class="bg-gradient-to-l from-purple-100 to-indigo-100 text-indigo-800 font-bold text-base px-3 py-1 rounded-lg tracking-wider">${code.id}</code>
+                  <span class="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded font-bold">${createdDate}</span>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs text-gray-600">
+                  <div>👤 <b>المالك:</b> <span class="truncate">${ownerEmail}</span></div>
+                  <div>📁 <b>الملفات:</b> ${filesCount} ملف</div>
+                  <div>🔄 <b>مرات الاستخدام:</b> ${usedCount}</div>
+                </div>
+              </div>
+              <div class="flex gap-2 flex-wrap">
+                <button onclick="copyCode('${code.id}')" class="bg-blue-100 text-blue-700 hover:bg-blue-200 px-3 py-1 rounded text-xs font-bold">📋 نسخ</button>
+                <button onclick="deleteRecoveryCode('${code.id}', '${ownerEmail.replace(/'/g, "\\'")}')" class="bg-red-600 text-white hover:bg-red-700 px-3 py-1 rounded text-xs font-bold">🗑️ حذف</button>
+              </div>
+            </div>
+          </div>
+        `;
+      });
+    });
+  };
+
+  window.deleteRecoveryCode = async function(codeId, ownerEmail) {
+    if (!confirm(`⚠️ حذف كود الاسترجاع:\n\n${codeId}\nالمالك: ${ownerEmail}\n\nبعد الحذف لن يستطيع صاحب الكود استرجاع مشترياته من جهاز آخر.\n\nهل أنت متأكد؟`)) return;
+    try {
+      await deleteDoc(doc(db, "recoveryCodes", codeId));
+      alert("✅ تم حذف الكود بنجاح");
+    } catch(e) {
+      alert("خطأ في الحذف: " + e.message);
+    }
+  };
+
+  async function loadAllFilesForExtraSelection() {
+    try {
+      const [filesSnap, lessonsSnap] = await Promise.all([
+        getDocs(collection(db, "files")),
+        getDocs(collection(db, "lessons"))
+      ]);
+      const lessonsMap = {};
+      lessonsSnap.forEach(d => { lessonsMap[d.id] = d.data(); });
+      
+      allFilesCache = [];
+      filesSnap.forEach(d => {
+        const f = d.data();
+        const lesson = lessonsMap[f.lessonId] || {};
+        allFilesCache.push({
+          id: d.id,
+          fileName: f.fileName || 'بدون اسم',
+          isPremium: f.isPremium === true,
+          price: f.price || '',
+          lessonTitle: lesson.title || '',
+          subject: lesson.subject || ''
+        });
+      });
+      allFilesCache.sort((a, b) => (a.subject || '').localeCompare(b.subject || '') || a.fileName.localeCompare(b.fileName));
+    } catch(e) { console.warn('loadAllFiles error:', e); }
+  }
+
+  window.openExtraFilesModal = async function(pkgId) {
+    currentEditingPkg = pkgId;
+    if (allFilesCache.length === 0) await loadAllFilesForExtraSelection();
+    
+    const current = savedExtraFiles[pkgId] || [];
+    selectedExtraFiles = new Set(current);
+    
+    const subjectSet = new Set();
+    allFilesCache.forEach(f => { if (f.subject) subjectSet.add(f.subject); });
+    const filter = document.getElementById('extraFilesSubjectFilter');
+    filter.innerHTML = '<option value="">كل المواد</option>' + 
+      Array.from(subjectSet).sort().map(s => `<option value="${s}">${s}</option>`).join('');
+    
+    document.getElementById('extraFilesSearch').value = '';
+    filterExtraFiles();
+    document.getElementById('extraFilesModal').classList.remove('hidden');
+    document.getElementById('extraFilesModal').classList.add('flex');
+  };
+
+  window.filterExtraFiles = function() {
+    const search = document.getElementById('extraFilesSearch').value.toLowerCase().trim();
+    const subject = document.getElementById('extraFilesSubjectFilter').value;
+    const list = document.getElementById('extraFilesList');
+    
+    const filtered = allFilesCache.filter(f => {
+      if (search && !f.fileName.toLowerCase().includes(search) && !f.lessonTitle.toLowerCase().includes(search)) return false;
+      if (subject && f.subject !== subject) return false;
+      return true;
+    });
+    
+    if (filtered.length === 0) {
+      list.innerHTML = '<p class="text-center text-gray-400 p-6 text-sm">لا توجد ملفات مطابقة</p>';
+      return;
+    }
+    
+    list.innerHTML = filtered.map(f => {
+      const premiumTag = f.isPremium ? '<span class="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded mr-1 font-bold">💰 مدفوع</span>' : '<span class="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded mr-1 font-bold">مجاني</span>';
+      return `
+      <label class="flex items-start gap-2 p-2 hover:bg-amber-50 rounded cursor-pointer border-b border-gray-100">
+        <input type="checkbox" ${selectedExtraFiles.has(f.id) ? 'checked' : ''} 
+               onchange="toggleExtraFile('${f.id}', this.checked)"
+               class="w-4 h-4 mt-1">
+        <div class="flex-1 min-w-0">
+          <div class="font-bold text-sm text-gray-800 truncate">${f.fileName}</div>
+          <div class="text-[11px] text-gray-500 mt-0.5 flex items-center flex-wrap gap-1">
+            ${premiumTag}
+            <span>${f.subject || 'بدون مادة'}</span>
+            ${f.lessonTitle ? `<span>• ${f.lessonTitle}</span>` : ''}
+          </div>
+        </div>
+      </label>`;
+    }).join('');
+    
+    updateExtraFilesCount();
+  };
+
+  window.toggleExtraFile = function(id, checked) {
+    if (checked) selectedExtraFiles.add(id);
+    else selectedExtraFiles.delete(id);
+    updateExtraFilesCount();
+  };
+
+  function updateExtraFilesCount() {
+    document.getElementById('extraFilesCount').innerText = selectedExtraFiles.size;
+  }
+
+  window.saveExtraFilesSelection = function() {
+    savedExtraFiles[currentEditingPkg] = Array.from(selectedExtraFiles);
+    const countEl = document.getElementById(`${currentEditingPkg}ExtraCount`);
+    if (countEl) countEl.innerText = selectedExtraFiles.size;
+    closeExtraFilesModal();
+  };
+
+  window.closeExtraFilesModal = function() {
+    document.getElementById('extraFilesModal').classList.add('hidden');
+    document.getElementById('extraFilesModal').classList.remove('flex');
+  };
+
+  window.togglePkg1Custom = function() {
+    const isFull = document.getElementById('pkg1IncludeAllPaid').checked;
+    document.getElementById('pkg1CustomSection').style.display = isFull ? 'none' : 'block';
+    if (isFull) {
+      document.querySelectorAll('input[name="pkg1_sub"]').forEach(el => el.checked = false);
+    }
+  };
+
+  window.loadStudents = function() {
+    onSnapshot(collection(db, "users"), async (snap) => {
+      const c = document.getElementById('studentsList');
+      c.innerHTML = "";
+      if(snap.empty) { c.innerHTML = "<p class='text-gray-500'>لا يوجد طلاب مسجلون بعد.</p>"; return; }
+      
+      let packagesSettings = {};
+      try {
+        const pkgSnap = await getDoc(doc(db, "settings", "packages"));
+        if (pkgSnap.exists()) packagesSettings = pkgSnap.data();
+      } catch(e) {}
+      
+      snap.forEach(d => {
+        const u = d.data();
+        const owned = Array.isArray(u.ownedPackages) ? u.ownedPackages : [];
+        const legacyActive = Array.isArray(u.activePackages) ? u.activePackages : [];
+        const subjectPkgs = Array.isArray(u.activePackageSubjects) ? u.activePackageSubjects : [];
+        const purchasedFiles = Array.isArray(u.purchasedFiles) ? u.purchasedFiles : [];
+        
+        const hasAnyAccess = owned.length > 0 || legacyActive.length > 0 || subjectPkgs.length > 0 || purchasedFiles.length > 0;
+        
+        let badgesHtml = '';
+        if (owned.length > 0) {
+          owned.forEach(p => {
+            const pkg = packagesSettings[p.id];
+            const name = pkg?.title || p.id;
+            const isFull = pkg?.isFull === true;
+            const cls = isFull ? 'bg-amber-100 text-amber-800 border-amber-300' : 'bg-blue-100 text-blue-800 border-blue-300';
+            badgesHtml += `<span class="text-[11px] ${cls} border px-2 py-0.5 rounded-full font-bold ml-1 mb-1 inline-block">${isFull ? '👑 ' : '📦 '}${name}</span>`;
+          });
+        } else if (legacyActive.length > 0) {
+          legacyActive.forEach(id => {
+            const pkg = packagesSettings[id];
+            const name = pkg?.title || id;
+            badgesHtml += `<span class="text-[11px] bg-amber-100 text-amber-800 border border-amber-300 px-2 py-0.5 rounded-full font-bold ml-1 mb-1 inline-block">👑 ${name} (قديم)</span>`;
+          });
+          if (subjectPkgs.length > 0) badgesHtml += `<span class="text-[11px] bg-gray-100 text-gray-700 border border-gray-300 px-2 py-0.5 rounded-full ml-1 mb-1 inline-block">${subjectPkgs.length} مادة</span>`;
+        }
+        if (purchasedFiles.length > 0) {
+          badgesHtml += `<span class="text-[11px] bg-emerald-100 text-emerald-800 border border-emerald-300 px-2 py-0.5 rounded-full font-bold ml-1 mb-1 inline-block">🛒 ${purchasedFiles.length} درس مفرد</span>`;
+        }
+        if (!hasAnyAccess) badgesHtml = '<span class="text-[11px] bg-gray-100 text-gray-500 border border-gray-200 px-2 py-0.5 rounded-full font-bold">لا صلاحيات</span>';
+        
+        let actionBtnsHtml = '';
+        owned.forEach(p => {
+          const pkg = packagesSettings[p.id];
+          const name = pkg?.title || p.id;
+          actionBtnsHtml += `<button onclick="revokeStudentPackage('${d.id}', '${p.id}', '${name.replace(/'/g, "\\'")}')" class="text-[10px] bg-red-100 text-red-700 hover:bg-red-200 px-2 py-1 rounded font-bold mr-1 mb-1">سحب ${name}</button>`;
+        });
+        const emailSafe = (u.email || '').replace(/'/g, "\\'");
+        actionBtnsHtml += `<button onclick="deleteStudentAccount('${d.id}', '${emailSafe}')" class="text-[10px] bg-red-600 text-white hover:bg-red-700 px-3 py-1 rounded font-bold mr-1 mb-1">🗑️ حذف الحساب</button>`;
+        
+        c.innerHTML += `<div class="bg-white p-4 rounded-lg shadow mb-3">
+          <div class="flex justify-between items-start flex-wrap gap-2">
+            <div class="flex-1 min-w-0">
+              <h4 class="font-bold text-gray-800 truncate">${u.email || u.name || 'طالب بدون اسم'}</h4>
+              <p class="text-xs text-gray-400 mt-1">ID: ${d.id.substring(0,10)}...</p>
+              <div class="mt-2 flex flex-wrap">${badgesHtml}</div>
+            </div>
+            ${actionBtnsHtml ? `<div class="flex flex-wrap items-start">${actionBtnsHtml}</div>` : ''}
+          </div>
+        </div>`;
+      });
+    });
+  }
+
+  window.revokeStudentPackage = async function(uid, pkgId, pkgName) {
+    if (!confirm(`هل أنت متأكد من سحب "${pkgName}" من هذا الطالب؟`)) return;
+    try {
+      const userRef = doc(db, "users", uid);
+      const [userSnap, pkgSnap] = await Promise.all([
+        getDoc(userRef),
+        getDoc(doc(db, "settings", "packages"))
+      ]);
+      if (!userSnap.exists()) { alert("الطالب غير موجود"); return; }
+      const userData = userSnap.data();
+      const packages = pkgSnap.exists() ? pkgSnap.data() : {};
+      
+      const newOwned = (userData.ownedPackages || []).filter(p => p.id !== pkgId);
+      const newActivePackages = [];
+      const newSubjects = new Set();
+      
+      newOwned.forEach(p => {
+        const pkg = packages[p.id];
+        if (!pkg) return;
+        if (pkg.isFull) newActivePackages.push(p.id);
+        else if (Array.isArray(pkg.subjects)) {
+          pkg.subjects.forEach(s => newSubjects.add(normalizeSubject(s)));
+        }
+      });
+      
+      await updateDoc(userRef, {
+        ownedPackages: newOwned,
+        activePackages: newActivePackages,
+        activePackageSubjects: Array.from(newSubjects)
+      });
+      
+      alert(`تم سحب "${pkgName}" بنجاح ✅`);
+    } catch(e) { alert("خطأ: " + e.message); }
+  }
+
+  window.deleteStudentAccount = async function(uid, email) {
+    if (!confirm(`⚠️ حذف حساب "${email}" نهائياً؟`)) return;
+    if (!confirm(`تأكيد نهائي: سيتم حذف البيانات من قاعدة البيانات. هل أنت متأكد؟`)) return;
+    
+    try {
+      await deleteDoc(doc(db, "users", uid));
+      alert(`✅ تم حذف حساب "${email}" من قاعدة البيانات.`);
+    } catch(e) {
+      alert("خطأ في الحذف: " + e.message);
+    }
+  };
+
+  window.selectCodeType = function(type) {
+    currentCodeType = type;
+    const btnPkg = document.getElementById('btn-type-package');
+    const btnCart = document.getElementById('btn-type-cart');
+    const activeClass = "flex-1 p-3 rounded-lg font-bold border bg-indigo-600 text-white border-indigo-600";
+    const inactiveClass = "flex-1 p-3 rounded-lg font-bold border bg-white text-indigo-900 hover:bg-indigo-50 border-gray-300";
+    btnPkg.className = type === 'package' ? activeClass : inactiveClass;
+    btnCart.className = type === 'cart' ? activeClass : inactiveClass;
+    document.getElementById('packageSelector').classList.toggle('hidden', type !== 'package');
+  }
+
+  window.generateCode = async function(batchSize = 1, btnElement = null) {
+    const btns = document.querySelectorAll('button[onclick^="generateCode"]');
+    const originalTexts = Array.from(btns).map(b => b.innerText);
+    btns.forEach(b => { b.disabled = true; b.innerText = "جاري التوليد..."; });
+    
+    try {
+      let targetId = "", targetName = "";
+      if(currentCodeType === 'package') {
+        const select = document.getElementById('codeTargetPackage');
+        targetId = select.value;
+        targetName = select.options[select.selectedIndex]?.text || "";
+        if(!targetId) { alert("يرجى إنشاء الباقات أولاً"); return; }
+      } else if(currentCodeType === 'cart') {
+        targetId = "cart_unlock";
+        targetName = "فتح محتويات السلة";
+      }
+      
+      const generatedCodes = [];
+      
+      for (let i = 0; i < batchSize; i++) {
+        let finalCode = "";
+        let attempts = 0;
+        let unique = false;
+        
+        while (!unique && attempts < 15) {
+          const candidate = Math.random().toString(36).substring(2, 8).toUpperCase();
+          
+          const idCheck = await getDoc(doc(db, "codes", candidate));
+          if (idCheck.exists()) { attempts++; continue; }
+          
+          const fieldQ = query(collection(db, "codes"), where("code", "==", candidate));
+          const fieldSnap = await getDocs(fieldQ);
+          if (!fieldSnap.empty) { attempts++; continue; }
+          
+          finalCode = candidate;
+          unique = true;
+        }
+        
+        if (!finalCode) continue;
+        
+        await setDoc(doc(db, "codes", finalCode), { 
+          code: finalCode,
+          isUsed: false, 
+          isDisabled: false,
+          type: currentCodeType, 
+          targetId: targetId, 
+          targetName: targetName, 
+          createdAt: new Date() 
+        });
+        generatedCodes.push(finalCode);
+      }
+      
+      if (batchSize === 1) {
+        alert(`تم توليد كود جديد: ${generatedCodes[0]}\nمخصص لـ: ${targetName}`);
+      } else {
+        alert(`تم توليد ${generatedCodes.length} كود بنجاح ✅\n\n${generatedCodes.join('\n')}`);
+      }
+    } catch(e) { alert("خطأ: " + e.message); }
+    finally { btns.forEach((b, i) => { b.disabled = false; b.innerText = originalTexts[i]; }); }
+  }
+
+  window.loadPackagesForCodes = function() {
+    if (window._pkgForCodesUnsub) window._pkgForCodesUnsub();
+    window._pkgForCodesUnsub = onSnapshot(doc(db, "settings", "packages"), (docSnap) => {
+      const select = document.getElementById('codeTargetPackage');
+      if (!select) return;
+      const currentVal = select.value;
+      select.innerHTML = "";
+      if(docSnap.exists()) {
+        const data = docSnap.data();
+        if(data.pkg1?.title) select.innerHTML += `<option value="pkg1">${data.pkg1.title}</option>`;
+        if(data.pkg2?.title) select.innerHTML += `<option value="pkg2">${data.pkg2.title}</option>`;
+        if(data.pkg3?.title) select.innerHTML += `<option value="pkg3">${data.pkg3.title}</option>`;
+      }
+      if(select.innerHTML === "") select.innerHTML = `<option value="">يرجى إنشاء الباقات أولاً</option>`;
+      else if (currentVal) select.value = currentVal;
+    });
+  }
+
+  window.loadCodes = function() {
+    onSnapshot(collection(db, "codes"), async (snap) => {
+      const c = document.getElementById('codesList');
+      c.innerHTML = "";
+      if(snap.empty) { c.innerHTML = "<p class='text-gray-500'>لا توجد أكواد مولدة.</p>"; return; }
+      
+      let packagesSettings = {};
+      try {
+        const pkgSnap = await getDoc(doc(db, "settings", "packages"));
+        if (pkgSnap.exists()) packagesSettings = pkgSnap.data();
+      } catch(e) {}
+      
+      let usersMap = {};
+      try {
+        const usersSnap = await getDocs(collection(db, "users"));
+        usersSnap.forEach(u => { usersMap[u.id] = u.data().email || 'غير معروف'; });
+      } catch(e) {}
+      
+      const codesArr = [];
+      snap.forEach(d => codesArr.push({ id: d.id, ...d.data() }));
+      codesArr.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+      
+      codesArr.forEach(cd => {
+        const displayCode = cd.code || cd.id;
+        const isDisabled = cd.isDisabled === true;
+        let statusBadge = '';
+        if (isDisabled) statusBadge = '<span class="text-xs bg-gray-200 text-gray-700 px-2 py-1 rounded font-bold">معطّل</span>';
+        else if (cd.isUsed) statusBadge = '<span class="text-xs bg-red-100 text-red-700 px-2 py-1 rounded font-bold">مستخدم</span>';
+        else statusBadge = '<span class="text-xs bg-green-100 text-green-700 px-2 py-1 rounded font-bold">متاح</span>';
+        
+        const typeBadge = cd.type === 'package' ? '📦 باقة' : '🛒 فتح السلة';
+        
+        let subsInfo = '';
+        if (cd.type === 'package' && cd.targetId && packagesSettings[cd.targetId]) {
+          const pkg = packagesSettings[cd.targetId];
+          if (!pkg.isFull && Array.isArray(pkg.subjects) && pkg.subjects.length > 0) {
+            subsInfo = `<div class="text-[10px] text-gray-500 mt-1">📚 ${pkg.subjects.join(' • ')}${pkg.extraFiles?.length ? ` + 🎁 ${pkg.extraFiles.length} ملف` : ''}</div>`;
+          } else if (pkg.isFull) {
+            subsInfo = `<div class="text-[10px] text-amber-600 mt-1">👑 يشمل كل الملفات المدفوعة</div>`;
+          }
+        }
+        
+        let usageInfo = '';
+        if (cd.isUsed && cd.usedBy) {
+          const usedByEmail = usersMap[cd.usedBy] || (cd.usedBy.startsWith('guest_') ? 'زائر (بدون تسجيل)' : cd.usedBy.substring(0, 10) + '...');
+          const usedAt = cd.usedAt?.seconds 
+            ? new Date(cd.usedAt.seconds * 1000).toLocaleString('ar-SY', { dateStyle: 'short', timeStyle: 'short' }) 
+            : 'غير معروف';
+          usageInfo = `<div class="text-[10px] text-gray-600 mt-1">👤 ${usedByEmail} • 🕐 ${usedAt}</div>`;
+        }
+        
+        const copyBtn = `<button onclick="copyCode('${displayCode}')" class="bg-blue-100 text-blue-700 hover:bg-blue-200 px-2 py-1 rounded text-xs" title="نسخ">📋</button>`;
+        const disableBtn = isDisabled 
+          ? `<button onclick="toggleCodeDisabled('${cd.id}', false)" class="bg-green-100 text-green-700 hover:bg-green-200 px-2 py-1 rounded text-xs" title="تفعيل">✅</button>`
+          : (cd.isUsed ? '' : `<button onclick="toggleCodeDisabled('${cd.id}', true)" class="bg-yellow-100 text-yellow-700 hover:bg-yellow-200 px-2 py-1 rounded text-xs" title="تعطيل">⏸️</button>`);
+        const deleteBtn = `<button onclick="deleteItem('codes','${cd.id}')" class="bg-red-600 text-white px-2 py-1 rounded text-xs">🗑️</button>`;
+        
+        c.innerHTML += `<div class="bg-white p-3 rounded-lg shadow mb-2 flex justify-between items-start gap-2 ${isDisabled ? 'opacity-60' : ''}">
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2 flex-wrap">
+              <code class="bg-gray-100 text-indigo-800 font-bold text-lg px-3 py-1 rounded-lg tracking-wider">${displayCode}</code>
+              ${statusBadge}
+            </div>
+            <div class="text-xs text-gray-500 mt-1">
+              <span class="font-bold">${typeBadge}</span> — <span>${cd.targetName || 'غير محدد'}</span>
+            </div>
+            ${subsInfo}
+            ${usageInfo}
+          </div>
+          <div class="flex gap-1 flex-wrap items-start">${copyBtn}${disableBtn}${deleteBtn}</div>
+        </div>`;
+      });
+    });
+  }
+
+  window.copyCode = async function(code) {
+    try {
+      await navigator.clipboard.writeText(code);
+      const toast = document.createElement('div');
+      toast.className = 'fixed top-4 left-1/2 -translate-x-1/2 bg-green-600 text-white px-4 py-2 rounded-lg shadow-lg z-[100] font-bold';
+      toast.innerText = `✅ تم نسخ: ${code}`;
+      document.body.appendChild(toast);
+      setTimeout(() => toast.remove(), 1500);
+    } catch(e) {
+      const ta = document.createElement('textarea');
+      ta.value = code;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+      alert(`تم نسخ: ${code}`);
+    }
+  }
+
+  window.toggleCodeDisabled = async function(codeId, newState) {
+    try { await updateDoc(doc(db, "codes", codeId), { isDisabled: newState }); }
+    catch(e) { alert("خطأ: " + e.message); }
+  }
+
+  window.savePackages = async function() {
+    const btn = event?.target || document.querySelector('button[onclick="savePackages()"]');
+    if (btn) { btn.disabled = true; btn.innerText = "جاري الحفظ..."; }
+    
+    try {
+      const pkg1Title = document.getElementById('pkg1Title').value.trim();
+      const pkg1Price = document.getElementById('pkg1Price').value.trim();
+      const pkg1IsFull = document.getElementById('pkg1IncludeAllPaid').checked;
+      const pkg2Title = document.getElementById('pkg2Title').value.trim();
+      const pkg2Price = document.getElementById('pkg2Price').value.trim();
+      const pkg3Title = document.getElementById('pkg3Title').value.trim();
+      const pkg3Price = document.getElementById('pkg3Price').value.trim();
+      
+      const getSubjects = (prefix) => Array.from(document.querySelectorAll(`input[name="${prefix}_sub"]:checked`)).map(el => el.value);
+      const pkg1Subs = getSubjects('pkg1');
+      const pkg2Subs = getSubjects('pkg2');
+      const pkg3Subs = getSubjects('pkg3');
+      
+      if (pkg1Title) {
+        if (!pkg1Price || isNaN(Number(pkg1Price))) { alert("سعر الباقة الذهبية غير صحيح"); return; }
+        if (!pkg1IsFull && pkg1Subs.length === 0 && (savedExtraFiles.pkg1 || []).length === 0) {
+          alert("الباقة الذهبية: يجب تفعيل 'يشمل جميع الملفات' أو اختيار مواد/ملفات"); return;
+        }
+      }
+      if (pkg2Title) {
+        if (!pkg2Price || isNaN(Number(pkg2Price))) { alert("سعر الباقة الثانية غير صحيح"); return; }
+        if (pkg2Subs.length === 0 && (savedExtraFiles.pkg2 || []).length === 0) {
+          alert("الباقة الثانية: يجب اختيار مادة أو ملف واحد على الأقل"); return;
+        }
+      }
+      if (pkg3Title) {
+        if (!pkg3Price || isNaN(Number(pkg3Price))) { alert("سعر الباقة الثالثة غير صحيح"); return; }
+        if (pkg3Subs.length === 0 && (savedExtraFiles.pkg3 || []).length === 0) {
+          alert("الباقة الثالثة: يجب اختيار مادة أو ملف واحد على الأقل"); return;
+        }
+      }
+      
+      const pkg1BorderColor = document.getElementById('pkg1BorderColor')?.value || '#fbbf24';
+      const pkg1BgColor = document.getElementById('pkg1BgColor')?.value || '#fffbeb';
+      const pkg1ButtonColor = document.getElementById('pkg1ButtonColor')?.value || '#f59e0b';
+      const pkg2BorderColor = document.getElementById('pkg2BorderColor')?.value || '#fb923c';
+      const pkg2BgColor = document.getElementById('pkg2BgColor')?.value || '#ffffff';
+      const pkg2ButtonColor = document.getElementById('pkg2ButtonColor')?.value || '#f97316';
+      const pkg3BorderColor = document.getElementById('pkg3BorderColor')?.value || '#fdba74';
+      const pkg3BgColor = document.getElementById('pkg3BgColor')?.value || '#ffffff';
+      const pkg3ButtonColor = document.getElementById('pkg3ButtonColor')?.value || '#4f46e5';
+      
+      const pkg1 = { 
+        title: pkg1Title, desc: document.getElementById('pkg1Desc').value, 
+        price: pkg1Price, isFull: pkg1IsFull,
+        subjects: pkg1IsFull ? [] : pkg1Subs.map(normalizeSubject),
+        extraFiles: pkg1IsFull ? [] : (savedExtraFiles.pkg1 || []),
+        borderColor: pkg1BorderColor,
+        bgColor: pkg1BgColor,
+        buttonColor: pkg1ButtonColor
+      };
+      const pkg2 = { 
+        title: pkg2Title, desc: document.getElementById('pkg2Desc').value, 
+        price: pkg2Price, isFull: false,
+        subjects: pkg2Subs.map(normalizeSubject),
+        extraFiles: savedExtraFiles.pkg2 || [],
+        borderColor: pkg2BorderColor,
+        bgColor: pkg2BgColor,
+        buttonColor: pkg2ButtonColor
+      };
+      const pkg3 = { 
+        title: pkg3Title, desc: document.getElementById('pkg3Desc').value, 
+        price: pkg3Price, isFull: false,
+        subjects: pkg3Subs.map(normalizeSubject),
+        extraFiles: savedExtraFiles.pkg3 || [],
+        borderColor: pkg3BorderColor,
+        bgColor: pkg3BgColor,
+        buttonColor: pkg3ButtonColor
+      };
+      
+      await setDoc(doc(db, "settings", "packages"), { pkg1, pkg2, pkg3 });
+      alert("تم حفظ الباقات بنجاح ✅");
+    } catch(e) { alert("خطأ: " + e.message); }
+    finally { if (btn) { btn.disabled = false; btn.innerText = "حفظ الباقات"; } }
+  }
+
+  window.loadPackagesSettings = async function() {
+    const pkg1Subs = document.getElementById('pkg1Subjects');
+    const pkg2Subs = document.getElementById('pkg2Subjects');
+    const pkg3Subs = document.getElementById('pkg3Subjects');
+    const subjHTML = (prefix) => allSubjects.map(s => `<label class="flex items-center gap-1 text-sm"><input type="checkbox" name="${prefix}_sub" value="${s}" class="rounded"> ${s}</label>`).join('');
+    pkg1Subs.innerHTML = subjHTML('pkg1');
+    pkg2Subs.innerHTML = subjHTML('pkg2');
+    pkg3Subs.innerHTML = subjHTML('pkg3');
+
+    const docSnap = await getDoc(doc(db, "settings", "packages"));
+    if(docSnap.exists()) {
+      const data = docSnap.data();
+      if(data.pkg1) {
+        document.getElementById('pkg1Title').value = data.pkg1.title || '';
+        document.getElementById('pkg1Desc').value = data.pkg1.desc || '';
+        document.getElementById('pkg1Price').value = data.pkg1.price || '';
+        document.getElementById('pkg1IncludeAllPaid').checked = data.pkg1.isFull !== false;
+        if(data.pkg1.subjects) data.pkg1.subjects.forEach(sub => { 
+          const chk = pkg1Subs.querySelector(`input[value="${sub}"]`); if(chk) chk.checked = true; 
+        });
+        if(data.pkg1.borderColor) document.getElementById('pkg1BorderColor').value = data.pkg1.borderColor;
+        if(data.pkg1.bgColor) document.getElementById('pkg1BgColor').value = data.pkg1.bgColor;
+        if(data.pkg1.buttonColor) document.getElementById('pkg1ButtonColor').value = data.pkg1.buttonColor;
+        savedExtraFiles.pkg1 = data.pkg1.extraFiles || [];
+        document.getElementById('pkg1ExtraCount').innerText = savedExtraFiles.pkg1.length;
+        togglePkg1Custom();
+      }
+      if(data.pkg2) {
+        document.getElementById('pkg2Title').value = data.pkg2.title || '';
+        document.getElementById('pkg2Desc').value = data.pkg2.desc || '';
+        document.getElementById('pkg2Price').value = data.pkg2.price || '';
+        if(data.pkg2.subjects) data.pkg2.subjects.forEach(sub => { 
+          const chk = pkg2Subs.querySelector(`input[value="${sub}"]`); if(chk) chk.checked = true; 
+        });
+        if(data.pkg2.borderColor) document.getElementById('pkg2BorderColor').value = data.pkg2.borderColor;
+        if(data.pkg2.bgColor) document.getElementById('pkg2BgColor').value = data.pkg2.bgColor;
+        if(data.pkg2.buttonColor) document.getElementById('pkg2ButtonColor').value = data.pkg2.buttonColor;
+        savedExtraFiles.pkg2 = data.pkg2.extraFiles || [];
+        document.getElementById('pkg2ExtraCount').innerText = savedExtraFiles.pkg2.length;
+      }
+      if(data.pkg3) {
+        document.getElementById('pkg3Title').value = data.pkg3.title || '';
+        document.getElementById('pkg3Desc').value = data.pkg3.desc || '';
+        document.getElementById('pkg3Price').value = data.pkg3.price || '';
+        if(data.pkg3.subjects) data.pkg3.subjects.forEach(sub => { 
+          const chk = pkg3Subs.querySelector(`input[value="${sub}"]`); if(chk) chk.checked = true; 
+        });
+        if(data.pkg3.borderColor) document.getElementById('pkg3BorderColor').value = data.pkg3.borderColor;
+        if(data.pkg3.bgColor) document.getElementById('pkg3BgColor').value = data.pkg3.bgColor;
+        if(data.pkg3.buttonColor) document.getElementById('pkg3ButtonColor').value = data.pkg3.buttonColor;
+        savedExtraFiles.pkg3 = data.pkg3.extraFiles || [];
+        document.getElementById('pkg3ExtraCount').innerText = savedExtraFiles.pkg3.length;
+      }
+    } else {
+      document.getElementById('pkg1IncludeAllPaid').checked = true;
+      togglePkg1Custom();
+    }
+    
+    ['pkg1BorderColor','pkg1BgColor','pkg1ButtonColor','pkg2BorderColor','pkg2BgColor','pkg2ButtonColor','pkg3BorderColor','pkg3BgColor','pkg3ButtonColor'].forEach(id => {
+      try { window.syncColorToHex(id); } catch(e) {}
+    });
+  }
+
+  window.saveDisplaySettings = async function() {
+    const btn = event.target;
+    btn.disabled = true; btn.innerText = "جاري الحفظ...";
+    const currency = document.getElementById('currencyType').value || 'ل.س';
+    const opacity = document.getElementById('headerOpacity').value || 30;
+    const bgColor = document.getElementById('marqueeBgColor').value || '#f97316';
+    await setDoc(doc(db, "settings", "appConfig"), { currency, headerOpacity: Number(opacity), marqueeBgColor: bgColor }, { merge: true });
+    alert("تم حفظ إعدادات العرض ✅");
+    btn.disabled = false; btn.innerText = "حفظ إعدادات العرض";
+  }
+
+  window.saveMarquee = async function() {
+    const btn = event.target;
+    btn.disabled = true; btn.innerText = "جاري الحفظ...";
+    const text = document.getElementById('marqueeText').value;
+    const speed = document.getElementById('marqueeSpeed').value;
+    const color = document.getElementById('marqueeColor').value;
+    await setDoc(doc(db, "settings", "appConfig"), { marqueeText: text, marqueeSpeed: Number(speed), marqueeColor: color }, { merge: true });
+    alert("تم حفظ شريط النصوص ✅");
+    btn.disabled = false; btn.innerText = "حفظ إعدادات الشريط";
+  }
+  
+  window.saveHeader = async function() {
+    const btn = event.target;
+    btn.disabled = true; btn.innerText = "جاري الرفع...";
+    const file = document.getElementById('headerBgFile').files[0];
+    if(!file) { alert("اختر صورة أولاً"); btn.disabled = false; btn.innerText = "حفظ خلفية الهيدر"; return; }
+    const base64 = await compressImage(file);
+    await setDoc(doc(db, "settings", "appConfig"), { headerBg: base64 }, { merge: true });
+    alert("تم حفظ خلفية الهيدر ✅");
+    loadSettings();
+    btn.disabled = false; btn.innerText = "حفظ خلفية الهيدر";
+  }
+  
+  window.uploadSlide = async function() {
+    const btn = event.target;
+    btn.disabled = true; btn.innerText = "جاري الرفع...";
+    const file = document.getElementById('sliderFile').files[0];
+    if(!file) { alert("اختر صورة أولاً"); btn.disabled = false; btn.innerText = "رفع صورة"; return; }
+    const base64 = await compressImage(file);
+    await addDoc(collection(db, "slider"), { image: base64, createdAt: new Date() });
+    alert("تم رفع الصورة ✅");
+    document.getElementById('sliderFile').value = '';
+    btn.disabled = false; btn.innerText = "رفع صورة";
+  }
+  
+  window.loadSlider = function() {
+    onSnapshot(collection(db, "slider"), (snap) => {
+      const c = document.getElementById('sliderList'); c.innerHTML = "";
+      snap.forEach(d => {
+        c.innerHTML += `<div class="relative mb-2"><img src="${d.data().image}" class="w-full h-32 object-cover rounded-lg"><button onclick="deleteItem('slider','${d.id}')" class="absolute top-1 left-1 bg-red-600 text-white p-1 rounded text-xs">حذف</button></div>`;
+      });
+    });
+  }
+  
+  window.loadSettings = async function() {
+    const docSnap = await getDoc(doc(db, "settings", "appConfig"));
+    if(docSnap.exists()) {
+      const data = docSnap.data();
+      if(data.headerBg) { document.getElementById('currentHeaderBg').src = data.headerBg; document.getElementById('currentHeaderBg').classList.remove('hidden'); }
+      if(data.marqueeText) document.getElementById('marqueeText').value = data.marqueeText;
+      if(data.marqueeSpeed) document.getElementById('marqueeSpeed').value = data.marqueeSpeed;
+      if(data.marqueeColor) document.getElementById('marqueeColor').value = data.marqueeColor;
+      if(data.currency) document.getElementById('currencyType').value = data.currency;
+      if(data.headerOpacity) document.getElementById('headerOpacity').value = data.headerOpacity;
+      if(data.marqueeBgColor) document.getElementById('marqueeBgColor').value = data.marqueeBgColor;
+    }
+    try { window.syncColorToHex('marqueeBgColor'); } catch(e) {}
+  };
+
+  function initFileInputs() {
+    const container = document.getElementById('fileInputsContainer');
+    if(!container) return;
+    let fileInputsHTML = "";
+    for(let i=1; i<=4; i++) {
+      fileInputsHTML += `<div class="flex flex-col md:flex-row gap-2 items-center bg-white p-2 rounded border mb-2">
+        <input id="fileName${i}" type="text" placeholder="اسم الملف" class="md:w-1/4 p-2 border rounded text-sm w-full">
+        <input id="fileInput${i}" type="file" accept=".html,.pdf" class="md:w-1/4 p-1 border rounded text-sm w-full">
+        <input id="fileLink${i}" type="text" class="md:w-1/4 p-2 border rounded text-sm w-full" placeholder="رابط Drive">
+        <input id="filePrice${i}" type="number" min="0" placeholder="السعر" class="md:w-1/4 p-2 border rounded text-sm w-full">
+        <label class="flex items-center gap-1 text-sm md:w-auto"><input id="isPremium${i}" type="checkbox"> مدفوع</label>
+      </div>`;
+    }
+    container.innerHTML = fileInputsHTML;
+  }
+
+  window.adminAddLesson = async function() {
+    const btn = event.target;
+    btn.disabled = true; btn.innerText = "جاري الحفظ...";
+    const subject = document.getElementById('subject').value;
+    const title = document.getElementById('title').value;
+    if(!subject || !title) { alert("الرجاء اختيار المادة وكتابة العنوان!"); btn.disabled = false; btn.innerText = "حفظ الدرس"; return; }
+    try {
+      const lessonRef = await addDoc(collection(db, "lessons"), { subject, title, createdAt: new Date() });
+      for(let i=1; i<=4; i++) {
+        const fileInput = document.getElementById(`fileInput${i}`).files[0];
+        const linkInput = document.getElementById(`fileLink${i}`).value;
+        const isPremium = document.getElementById(`isPremium${i}`).checked;
+        const customName = document.getElementById(`fileName${i}`).value;
+        const price = document.getElementById(`filePrice${i}`).value; 
+        if(fileInput || linkInput) {
+          let fileData = "", isPdf = false, isExternal = false, fileName = "";
+          if(fileInput) {
+            fileName = customName || fileInput.name.replace(/\.[^/.]+$/, "");
+            fileData = await readFileAsBase64(fileInput);
+            isPdf = fileInput.type === 'application/pdf';
+            if(fileData.length > 900000) { alert(`حجم الملف ${i} كبير جداً.`); continue; }
+          } else {
+            fileName = customName || `ملف خارجي ${i}`;
+            fileData = linkInput;
+            isExternal = true;
+          }
+          await addDoc(collection(db, "files"), { lessonId: lessonRef.id, fileName, fileData, isPdf, isExternal, isPremium, price: price || "", createdAt: new Date() });
+        }
+      }
+      alert("تم حفظ الدرس بنجاح! 🎉");
+      document.getElementById('title').value = '';
+      for(let i=1; i<=4; i++) {
+        document.getElementById(`fileInput${i}`).value = '';
+        document.getElementById(`fileLink${i}`).value = '';
+        document.getElementById(`fileName${i}`).value = '';
+        document.getElementById(`filePrice${i}`).value = '';
+        document.getElementById(`isPremium${i}`).checked = false;
+      }
+      allFilesCache = [];
+      loadAllFilesForExtraSelection();
+    } catch (error) { alert("حدث خطأ: " + error.message); }
+    btn.disabled = false; btn.innerText = "حفظ الدرس";
+  };
+
+  window.loadLessons = function() {
+    onSnapshot(collection(db, "lessons"), (snapshot) => {
+      const container = document.getElementById('lessonsList');
+      container.innerHTML = "";
+      if(snapshot.empty) { container.innerHTML = "<p class='text-gray-500'>لا توجد دروس.</p>"; return; }
+      const subjects = {};
+      snapshot.forEach((docSnap) => {
+        const lesson = { id: docSnap.id, ...docSnap.data() };
+        const sName = lesson.subject || "غير مصنف";
+        if(!subjects[sName]) subjects[sName] = [];
+        subjects[sName].push(lesson);
+      });
+      let finalHTML = "";
+      let subjectIndex = 0;
+      Object.keys(subjects).forEach(subjectName => {
+        const catId = `cat_${subjectIndex}`, arrowId = `arrow_${subjectIndex}`;
+        finalHTML += `<div class="mb-4 border border-gray-200 rounded-xl overflow-hidden"><div onclick="toggleCategory('${catId}', '${arrowId}')" class="bg-indigo-50 p-4 cursor-pointer flex justify-between items-center hover:bg-indigo-100"><h3 class="text-xl font-bold text-indigo-800">📚 ${subjectName} (${subjects[subjectName].length})</h3><span id="${arrowId}" class="text-2xl">⬇️</span></div><div id="${catId}" class="p-4 hidden bg-gray-50 grid grid-cols-1 gap-4">`;
+        subjects[subjectName].forEach(lesson => {
+          finalHTML += `<div class="bg-white p-4 rounded-xl shadow border flex justify-between items-center"><div><h4 class="font-bold text-lg">${lesson.title}</h4><div class="flex gap-2 mt-2"><button onclick="openFilesModal('${lesson.id}', '${lesson.title.replace(/'/g, "\\'")}')" class="bg-blue-600 text-white px-3 py-1 rounded text-xs">📁 إدارة الملفات</button><button onclick="deleteItem('lessons','${lesson.id}')" class="bg-red-600 text-white px-3 py-1 rounded text-xs">حذف</button></div></div></div>`;
+        });
+        finalHTML += `</div></div>`;
+        subjectIndex++;
+      });
+      container.innerHTML = finalHTML;
+    });
+  };
+
+  window.openFilesModal = function(lessonId, lessonTitle) {
+    currentLessonId = lessonId;
+    document.getElementById('editLessonTitle').value = lessonTitle;
+    document.getElementById('filesModal').classList.remove('hidden');
+    document.getElementById('filesModal').classList.add('flex');
+    loadLessonFiles(lessonId);
+  };
+  
+  window.closeFilesModal = function() { 
+    document.getElementById('filesModal').classList.add('hidden'); 
+    document.getElementById('filesModal').classList.remove('flex'); 
+  };
+  
+  window.saveLessonTitle = async function() {
+    const newTitle = document.getElementById('editLessonTitle').value;
+    if(!newTitle) return;
+    await updateDoc(doc(db, "lessons", currentLessonId), { title: newTitle });
+    alert("تم تحديث العنوان");
+  };
+  
+  window.updateFilePrice = async function(id, price) { await updateDoc(doc(db, "files", id), { price: price || "" }); }
+  
+  window.loadLessonFiles = function(lessonId) {
+    const q = query(collection(db, "files"), where("lessonId", "==", lessonId));
+    onSnapshot(q, (snap) => {
+      const c = document.getElementById('filesList'); c.innerHTML = "";
+      if(snap.empty) { c.innerHTML = "<p class='text-gray-500 text-sm'>لا توجد ملفات.</p>"; return; }
+      
+      let filesArr = [];
+      snap.forEach(d => filesArr.push({ id: d.id, ...d.data() }));
+      filesArr.sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
+
+      filesArr.forEach((d, index) => {
+        const f = d;
+        const isExtra = index >= 4;
+        const cardBg = isExtra ? 'bg-red-50 border-red-200' : 'bg-gray-50 border-gray-200';
+        const extraBadge = isExtra ? '<span class="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded font-bold mr-2">إضافي</span>' : '';
+        const iconHtml = isExtra ? '<i class="fas fa-star text-red-500 mr-2"></i>' : '';
+        let toggleText = f.isPremium ? "جعله مجاني" : "جعله مدفوع";
+        c.innerHTML += `<div class="${cardBg} p-3 rounded-lg flex justify-between items-center mb-2 border">
+          <div class="flex-1"><b>${iconHtml}${extraBadge} ${f.fileName}</b> ${f.isPremium ? `<span class="text-xs text-amber-700 font-bold">(مدفوع)</span>` : ''}</div>
+          <div class="flex gap-2 items-center">
+            <input type="number" value="${f.price || ''}" placeholder="السعر" class="w-24 p-1 border rounded text-xs text-gray-600" onchange="updateFilePrice('${d.id}', this.value)">
+            <button onclick="toggleFilePremium('${d.id}', ${!f.isPremium})" class="bg-yellow-500 text-white px-2 py-1 rounded text-xs">${toggleText}</button>
+            <button onclick="deleteItem('files','${d.id}')" class="bg-red-600 text-white px-2 py-1 rounded text-xs">حذف</button>
+          </div>
+        </div>`;
+      });
+    });
+  };
+
+  window.addNewFileToLesson = async function() {
+    const btn = event.target;
+    btn.disabled = true; btn.innerText = "جاري الإضافة...";
+    const fName = document.getElementById('newFileName').value;
+    const fInput = document.getElementById('newFileInput').files[0];
+    const fLink = document.getElementById('newFileLink').value;
+    const fPrice = document.getElementById('newFilePrice').value;
+    const fIsPremium = document.getElementById('newFileIsPremium').checked;
+
+    if(!fInput && !fLink) { alert("الرجاء اختيار ملف أو إدخال رابط"); btn.disabled = false; btn.innerText = "إضافة الملف"; return; }
+    
+    let fileData = "", isPdf = false, isExternal = false, fileName = fName;
+    try {
+      if(fInput) {
+        if(!fileName) fileName = fInput.name.replace(/\.[^/.]+$/, "");
+        fileData = await readFileAsBase64(fInput);
+        isPdf = fInput.type === 'application/pdf';
+        if(fileData.length > 900000) { alert(`حجم الملف كبير جداً.`); btn.disabled = false; btn.innerText = "إضافة الملف"; return; }
+      } else {
+        if(!fileName) fileName = "ملف خارجي";
+        fileData = fLink;
+        isExternal = true;
+      }
+      await addDoc(collection(db, "files"), { lessonId: currentLessonId, fileName, fileData, isPdf, isExternal, isPremium: fIsPremium, price: fPrice || "", createdAt: new Date() });
+      alert("تمت إضافة الملف ✅");
+      document.getElementById('newFileName').value = '';
+      document.getElementById('newFileInput').value = '';
+      document.getElementById('newFileLink').value = '';
+      document.getElementById('newFilePrice').value = '';
+      document.getElementById('newFileIsPremium').checked = false;
+      allFilesCache = [];
+      loadAllFilesForExtraSelection();
+    } catch(e) { alert("خطأ: " + e.message); }
+    btn.disabled = false; btn.innerText = "إضافة الملف";
+  };
+
+  window.toggleFilePremium = async function(id, newState) { await updateDoc(doc(db, "files", id), { isPremium: newState }); };
+  window.toggleCategory = function(catId, arrowId) { document.getElementById(catId).classList.toggle('hidden'); };
+
+  window.adminAddAd = async function() {
+    const btn = event.target;
+    btn.disabled = true; btn.innerText = "جاري الحفظ...";
+    const title = document.getElementById('adTitle').value;
+    const imageFile = document.getElementById('adImageFile').files[0];
+    const videoFile = document.getElementById('adVideoFile').files[0];
+    if(!title || (!imageFile && !videoFile)) { alert("الرجاء إدخال عنوان وإضافة صورة أو فيديو!"); btn.disabled = false; btn.innerText = "حفظ"; return; }
+    try {
+      let imageBase64 = "", videoBase64 = "";
+      if(imageFile) imageBase64 = await compressImage(imageFile);
+      if(videoFile) {
+        videoBase64 = await readFileAsBase64(videoFile);
+        if(videoBase64.length > 900000) { alert("حجم الفيديو كبير جداً."); btn.disabled = false; btn.innerText = "حفظ"; return; }
+      }
+      await addDoc(collection(db, "ads"), { title, imageUrl: imageBase64, videoUrl: videoBase64, createdAt: new Date() });
+      alert("تم حفظ الإعلان! 🎉");
+      document.getElementById('adTitle').value=''; document.getElementById('adImageFile').value=''; document.getElementById('adVideoFile').value='';
+    } catch(e) { alert("خطأ: " + e.message); }
+    btn.disabled = false; btn.innerText = "حفظ";
+  };
+  
+  window.loadAds = function() {
+    onSnapshot(collection(db, "ads"), (snap) => {
+      const c = document.getElementById('adsList'); c.innerHTML = "";
+      if(snap.empty) c.innerHTML = "<p class='text-gray-500'>لا توجد إعلانات.</p>";
+      snap.forEach(d => {
+        const ad = d.data();
+        c.innerHTML += `<div class="bg-white p-4 rounded-lg shadow mb-3 flex justify-between items-center"><div><b>${ad.title}</b></div><button onclick="deleteItem('ads','${d.id}')" class="bg-red-600 text-white px-3 py-1 rounded text-sm">حذف</button></div>`;
+      });
+    });
+  };
+
+  window.adminAddExam = async function() {
+    const btn = event.target;
+    btn.disabled = true; btn.innerText = "جاري الرفع...";
+    const title = document.getElementById('examTitle').value;
+    const file = document.getElementById('examFile').files[0];
+    const link = document.getElementById('examLink').value;
+    if(!title || (!file && !link)) { alert("الرجاء إدخال اسم وإضافة ملف أو رابط!"); btn.disabled = false; btn.innerText = "رفع"; return; }
+    try {
+      let fileUrl = link, fileType = "رابط خارجي";
+      if(file) {
+        fileUrl = await readFileAsBase64(file);
+        fileType = file.type;
+        if(fileUrl.length > 900000) { alert("حجم الملف كبير جداً."); btn.disabled = false; btn.innerText = "رفع"; return; }
+      }
+      await addDoc(collection(db, "exams"), { title, fileUrl, fileType, isPremium: false, createdAt: new Date() });
+      alert("تم الرفع! 🎉");
+      document.getElementById('examTitle').value=''; document.getElementById('examFile').value=''; document.getElementById('examLink').value='';
+    } catch(e) { alert("خطأ: " + e.message); }
+    btn.disabled = false; btn.innerText = "رفع";
+  };
+  
+  window.loadExams = function() {
+    onSnapshot(collection(db, "exams"), (snap) => {
+      const c = document.getElementById('examsList'); c.innerHTML = "";
+      if(snap.empty) c.innerHTML = "<p class='text-gray-500'>لا توجد ملفات.</p>";
+      snap.forEach(d => {
+        const ex = d.data();
+        let toggleText = ex.isPremium ? "جعله مجاني" : "جعله مدفوع";
+        c.innerHTML += `<div class="bg-white p-4 rounded-lg shadow mb-3 flex justify-between items-center"><div><b>${ex.title}</b> <span class="text-xs text-gray-500">(${ex.fileType})</span></div><div class="flex gap-2"><button onclick="toggleExamPremium('${d.id}', ${!ex.isPremium})" class="bg-yellow-500 text-white px-2 py-1 rounded text-xs">${toggleText}</button><button onclick="deleteItem('exams','${d.id}')" class="bg-red-600 text-white px-2 py-1 rounded text-xs">حذف</button></div></div>`;
+      });
+    });
+  };
+  
+  window.toggleExamPremium = async function(id, newState) { await updateDoc(doc(db, "exams", id), { isPremium: newState }); };
+
+  window.deleteItem = async function(collectionName, id) {
+    if(!confirm("هل أنت متأكد من الحذف؟")) return;
+    try {
+      if (collectionName === 'lessons') {
+        try {
+          const q = query(collection(db, "files"), where("lessonId", "==", id));
+          const snap = await getDocs(q);
+          const deletePromises = [];
+          snap.forEach(d => deletePromises.push(deleteDoc(doc(db, "files", d.id))));
+          await Promise.all(deletePromises);
+        } catch(e) { 
+          console.warn("خطأ في حذف الملفات المرتبطة:", e); 
+        }
+      }
+      await deleteDoc(doc(db, collectionName, id));
+    } catch(e) {
+      alert("خطأ في الحذف: " + e.message);
+    }
+  };
+
+  // ==========================================
+  // 🧹 دوال الصيانة والتنظيف المطورة
+  // ==========================================
+  
+  function downloadCSV(csvContent, fileName) {
+    const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' }); 
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    link.setAttribute("href", url);
+    link.setAttribute("download", fileName);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+
+  window.loadMaintenanceStats = async function() {
+    try {
+      const [lessonsSnap, filesSnap, usersSnap, codesSnap] = await Promise.all([
+        getDocs(collection(db, "lessons")),
+        getDocs(collection(db, "files")),
+        getDocs(collection(db, "users")),
+        getDocs(collection(db, "codes"))
+      ]);
+      
+      document.getElementById('stat-db-lessons').innerText = lessonsSnap.size;
+      document.getElementById('stat-db-files').innerText = filesSnap.size;
+      document.getElementById('stat-db-users').innerText = usersSnap.size;
+      document.getElementById('stat-db-codes').innerText = codesSnap.size;
+    } catch (e) {
+      console.warn('Stats error:', e);
+      alert("تعذر جلب الإحصائيات: " + e.message);
+    }
+  };
+
+  // ✅ جديد: إحصائيات المبيعات والأرباح
+  window.loadSalesStats = async function() {
+    const btn = document.getElementById('btn-load-sales');
+    if(btn) { btn.disabled = true; btn.innerText = "جاري الحساب (قد يستغرق بضع ثوان)..."; }
+    
+    try {
+      const [usersSnap, filesSnap, extraFilesSnap, packagesSnap, codesSnap] = await Promise.all([
+        getDocs(collection(db, "users")),
+        getDocs(collection(db, "files")),
+        getDocs(collection(db, "extraFiles")),
+        getDoc(doc(db, "settings", "packages")),
+        getDocs(collection(db, "codes"))
+      ]);
+
+      // 1. خريطة أسعار الملفات
+      const filePrices = {};
+      filesSnap.forEach(d => { filePrices[d.id] = Number(d.data().price) || 0; });
+      extraFilesSnap.forEach(d => { filePrices[d.id] = Number(d.data().price) || 0; });
+
+      // 2. خريطة أسعار الباقات وأسمائها
+      const pkgData = packagesSnap.exists() ? packagesSnap.data() : {};
+      const packagePrices = {
+        pkg1: Number(pkgData.pkg1?.price) || 0,
+        pkg2: Number(pkgData.pkg2?.price) || 0,
+        pkg3: Number(pkgData.pkg3?.price) || 0
+      };
+
+      let totalRevenue = 0;
+      let filesSoldCount = 0;
+      let packagesSoldCount = 0;
+      const fileSalesMap = {}; // id -> count
+
+      // 3. حساب المبيعات من الحسابات
+      usersSnap.forEach(docSnap => {
+        const u = docSnap.data();
+        // أ) الملفات المفردة
+        const purchasedFiles = Array.isArray(u.purchasedFiles) ? u.purchasedFiles : [];
+        purchasedFiles.forEach(fid => {
+          totalRevenue += (filePrices[fid] || 0);
+          filesSoldCount++;
+          fileSalesMap[fid] = (fileSalesMap[fid] || 0) + 1;
+        });
+        // ب) الباقات
+        const ownedPackages = Array.isArray(u.ownedPackages) ? u.ownedPackages : [];
+        ownedPackages.forEach(p => {
+          totalRevenue += (packagePrices[p.id] || 0);
+          packagesSoldCount++;
+        });
+      });
+
+      // 4. ترتيب أكثر الملفات مبيعاً
+      const topFiles = Object.keys(fileSalesMap)
+        .map(id => ({ id, count: fileSalesMap[id] }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 5);
+
+      // جلب أسماء الملفات الأكثر مبيعاً
+      let topFilesHTML = "";
+      for (let i = 0; i < topFiles.length; i++) {
+        const tf = topFiles[i];
+        let name = "ملف غير معروف";
+        // ابحث في files
+        let fileDoc = filesSnap.docs.find(d => d.id === tf.id);
+        if (fileDoc) name = fileDoc.data().fileName;
+        else {
+          let extraDoc = extraFilesSnap.docs.find(d => d.id === tf.id);
+          if (extraDoc) name = extraDoc.data().fileName;
+        }
+        
+        topFilesHTML += `
+          <div class="flex justify-between items-center bg-gray-50 p-2 rounded border mb-1 text-sm">
+            <div class="flex items-center gap-2">
+              <span class="font-bold text-indigo-600 w-5 text-center">${i+1}</span>
+              <span class="truncate max-w-[200px] text-gray-700">${name}</span>
+            </div>
+            <span class="bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded font-bold text-xs">${tf.count} عملية</span>
+          </div>
+        `;
+      }
+
+      // 5. تحديث الواجهة
+      document.getElementById('stat-revenue').innerText = totalRevenue.toLocaleString('en-US');
+      document.getElementById('stat-files-sold').innerText = filesSoldCount;
+      document.getElementById('stat-pkgs-sold').innerText = packagesSoldCount;
+      document.getElementById('top-files-list').innerHTML = topFilesHTML || "<p class='text-gray-400 text-sm'>لا توجد مبيعات بعد.</p>";
+
+    } catch(e) {
+      alert("خطأ في حساب الإحصائيات: " + e.message);
+      console.error(e);
+    } finally {
+      if(btn) { btn.disabled = false; btn.innerText = "🔄 حساب إحصائيات المبيعات"; }
+    }
+  };
+
+  // 1. تصدير الأكواد
+  window.exportCodesCSV = async function() {
+    const btn = event?.target;
+    if(btn) { btn.disabled = true; btn.innerText = "جاري التصدير..."; }
+    try {
+      const snap = await getDocs(collection(db, "codes"));
+      let csv = "الكود,النوع,الحالة,تاريخ الإنشاء,المستخدم بواسطة\n";
+      snap.forEach(d => {
+        const data = d.data();
+        const code = data.code || d.id;
+        const status = data.isUsed ? "مستخدم" : (data.isDisabled ? "معطل" : "متاح");
+        const date = data.createdAt ? new Date(data.createdAt.seconds * 1000).toLocaleString('ar-SY') : "غير معروف";
+        const usedBy = data.usedBy || "";
+        csv += `"${code}","${data.type}","${status}","${date}","${usedBy}"\n`;
+      });
+      downloadCSV(csv, `codes_export_${new Date().toISOString().slice(0,10)}.csv`);
+    } catch(e) { alert("خطأ: " + e.message); }
+    finally { if(btn) { btn.disabled = false; btn.innerText = "📥 تصدير الأكواد (Excel)"; } }
+  };
+
+  // 2. تصدير الطلاب
+  window.exportUsersCSV = async function() {
+    const btn = event?.target;
+    if(btn) { btn.disabled = true; btn.innerText = "جاري التصدير..."; }
+    try {
+      const snap = await getDocs(collection(db, "users"));
+      let csv = "الاسم,البريد الإلكتروني,نوع الحساب,عدد المشتريات,تاريخ التسجيل\n";
+      snap.forEach(d => {
+        const data = d.data();
+        const name = data.name || "غير محدد";
+        const email = data.email || "زائر (بدون بريد)";
+        const type = data.email ? "مسجل" : "زائر مجهول";
+        const purchases = (data.purchasedFiles || []).length;
+        const date = data.createdAt ? new Date(data.createdAt.seconds * 1000).toLocaleString('ar-SY') : "غير معروف";
+        csv += `"${name}","${email}","${type}","${purchases}","${date}"\n`;
+      });
+      downloadCSV(csv, `users_export_${new Date().toISOString().slice(0,10)}.csv`);
+    } catch(e) { alert("خطأ: " + e.message); }
+    finally { if(btn) { btn.disabled = false; btn.innerText = "📥 تصدير الطلاب (Excel)"; } }
+  };
+
+  // 3. تنظيف الزوار الخاملين
+  window.cleanInactiveGuests = async function() {
+    if (!confirm("⚠️ سيتم حذف جميع الحسابات المجهولة (التي ليس لها بريد) والتي مضى عليها أكثر من 3 أيام ولم تشترِ أي شيء.\nهل أنت متأكد؟")) return;
+    
+    const btn = event.target;
+    btn.disabled = true; btn.innerText = "جاري الفحص...";
+    
+    try {
+      const snap = await getDocs(collection(db, "users"));
+      let deletedCount = 0;
+      let batch = writeBatch(db);
+      let batchCount = 0;
+      const now = Date.now();
+      const threeDaysMs = 3 * 24 * 60 * 60 * 1000;
+
+      for (const d of snap.docs) {
+        const data = d.data();
+        const isGuest = !data.email; 
+        const hasPurchases = (data.purchasedFiles && data.purchasedFiles.length > 0) || (data.ownedPackages && data.ownedPackages.length > 0);
+        const createdTs = data.createdAt?.seconds ? data.createdAt.seconds * 1000 : 0;
+        const isOld = (now - createdTs) > threeDaysMs;
+
+        if (isGuest && !hasPurchases && isOld) {
+          batch.delete(d.ref);
+          deletedCount++;
+          batchCount++;
+          if (batchCount === 500) {
+            await batch.commit();
+            batch = writeBatch(db);
+            batchCount = 0;
+          }
+        }
+      }
+      
+      if (batchCount > 0) await batch.commit();
+      
+      alert(`✅ تم حذف ${deletedCount} زائر خامل.`);
+      loadMaintenanceStats();
+    } catch (e) {
+      alert("خطأ: " + e.message);
+    } finally {
+      btn.disabled = false; btn.innerText = "👻 حذف الزوار الخاملين";
+    }
+  };
+
+  // 4. حذف الملفات المعلقة
+  window.cleanOrphanedFiles = async function() {
+    if (!confirm("⚠️ سيتم البحث عن الملفات التي تم حذف دروسها وحذفها نهائياً.\nهل أنت متأكد؟")) return;
+
+    const btn = event.target;
+    btn.disabled = true; btn.innerText = "جاري الفحص...";
+
+    try {
+      const [lessonsSnap, filesSnap] = await Promise.all([
+        getDocs(collection(db, "lessons")),
+        getDocs(collection(db, "files"))
+      ]);
+      
+      const validLessonIds = new Set();
+      lessonsSnap.forEach(d => validLessonIds.add(d.id));
+
+      let deletedCount = 0;
+      let batch = writeBatch(db);
+      let batchCount = 0;
+
+      for (const d of filesSnap.docs) {
+        const fileData = d.data();
+        if (!validLessonIds.has(fileData.lessonId)) {
+          batch.delete(d.ref);
+          deletedCount++;
+          batchCount++;
+          if (batchCount === 500) {
+            await batch.commit();
+            batch = writeBatch(db);
+            batchCount = 0;
+          }
+        }
+      }
+
+      if (batchCount > 0) await batch.commit();
+
+      alert(`✅ تم حذف ${deletedCount} ملف معلق.`);
+      loadMaintenanceStats();
+    } catch (e) {
+      alert("خطأ: " + e.message);
+    } finally {
+      btn.disabled = false; btn.innerText = "🧹 حذف الملفات المعلقة";
+    }
+  };
+
+  window.cleanUsedCodes = async function() {
+    if (!confirm("⚠️ هل أنت متأكد من حذف جميع الأكواد (المستخدمة + المعطلة)؟\nلا يمكن التراجع.")) return;
+    
+    const btn = event.target;
+    btn.disabled = true; btn.innerText = "جاري الحذف...";
+    
+    try {
+      const snap = await getDocs(collection(db, "codes"));
+      let deletedCount = 0;
+      let batch = writeBatch(db);
+      let batchCount = 0;
+      
+      for (const d of snap.docs) {
+        const data = d.data();
+        if (data.isUsed === true || data.isDisabled === true) {
+          batch.delete(d.ref);
+          deletedCount++;
+          batchCount++;
+          
+          if (batchCount === 500) {
+            await batch.commit();
+            batch = writeBatch(db);
+            batchCount = 0;
+          }
+        }
+      }
+      
+      if (batchCount > 0) await batch.commit();
+      
+      if (deletedCount > 0) {
+        alert(`✅ تم حذف ${deletedCount} كود بنجاح.`);
+      } else {
+        alert("لم يتم العثور على أكواد مستخدمة أو معطلة.");
+      }
+      loadMaintenanceStats();
+    } catch (e) {
+      alert("خطأ: " + e.message);
+    } finally {
+      btn.disabled = false; btn.innerText = "🗑️ حذف الأكواد المستخدمة";
+    }
+  };
+
+  window.cleanAllCodes = async function() {
+    if (!confirm("🚨 تحذير خطير: سيتم حذف *جميع* أكواد التفعيل نهائياً.\nهل أنت متأكد؟")) return;
+    if (!confirm("تأكيد أخير: هل تريد فعلاً مسح كل الأكواد من قاعدة البيانات؟")) return;
+    
+    const btn = event.target;
+    btn.disabled = true; btn.innerText = "جاري الحذف...";
+    
+    try {
+      const snap = await getDocs(collection(db, "codes"));
+      let deletedCount = 0;
+      let batch = writeBatch(db);
+      let batchCount = 0;
+      
+      for (const d of snap.docs) {
+        batch.delete(d.ref);
+        deletedCount++;
+        batchCount++;
+        
+        if (batchCount === 500) {
+          await batch.commit();
+          batch = writeBatch(db);
+          batchCount = 0;
+        }
+      }
+      if (batchCount > 0) await batch.commit();
+      
+      alert(`✅ تم حذف جميع الأكواد (${deletedCount}).`);
+      loadMaintenanceStats();
+    } catch (e) {
+      alert("خطأ: " + e.message);
+    } finally {
+      btn.disabled = false; btn.innerText = "🗑️ حذف جميع الأكواد";
+    }
+  };
+
+  window.cleanRecoveryCodes = async function() {
+    if (!confirm("⚠️ سيتم حذف أكواد الاسترجاع التي لا ينتمي أصحابها لحسابات موجودة حالياً.\nهل أنت متأكد؟")) return;
+    
+    const btn = event.target;
+    btn.disabled = true; btn.innerText = "جاري الفحص والحذف...";
+    
+    try {
+      const usersSnap = await getDocs(collection(db, "users"));
+      const validUids = new Set();
+      usersSnap.forEach(u => validUids.add(u.id));
+      
+      const recoverySnap = await getDocs(collection(db, "recoveryCodes"));
+      let deletedCount = 0;
+      let batch = writeBatch(db);
+      let batchCount = 0;
+      
+      for (const d of recoverySnap.docs) {
+        const codeData = d.data();
+        if (!validUids.has(codeData.uid)) {
+          batch.delete(d.ref);
+          deletedCount++;
+          batchCount++;
+          
+          if (batchCount === 500) {
+            await batch.commit();
+            batch = writeBatch(db);
+            batchCount = 0;
+          }
+        }
+      }
+      
+      if (batchCount > 0) await batch.commit();
+      
+      if (deletedCount > 0) {
+        alert(`✅ تم حذف ${deletedCount} كود استرجاع "يتيم".`);
+      } else {
+        alert("جميع أكواد الاسترجاع تنتمي لمستخدمين حاليين.");
+      }
+    } catch (e) {
+      alert("خطأ: " + e.message);
+    } finally {
+      btn.disabled = false; btn.innerText = "🗑️ حذف أكواد الاسترجاع (اليتيمة)";
+    }
+  };
+
+</script>
+</head>
+<body class="bg-gray-100 p-6">
+
+  <div id="loadingAuth" class="fixed inset-0 bg-indigo-900 flex justify-center items-center z-50">
+    <div class="text-white text-center">
+      <div class="animate-spin rounded-full h-12 w-12 border-4 border-white/30 border-t-white mx-auto mb-3"></div>
+      <p class="font-bold">جاري التحقق من الجلسة...</p>
+    </div>
+  </div>
+
+  <div id="loginOverlay" class="fixed inset-0 bg-indigo-900 flex justify-center items-center z-50 hidden">
+    <div class="bg-white p-8 rounded-2xl shadow-xl w-96 text-center">
+      <h2 class="text-2xl font-bold text-indigo-900 mb-6">لوحة تحكم إنجاز 🔐</h2>
+      <p class="text-sm text-gray-500 mb-4">الرجاء تسجيل الدخول بحساب المدير</p>
+      <input id="loginUser" type="email" placeholder="البريد الإلكتروني للأدمن" class="w-full p-3 mb-4 border rounded-lg">
+      <input id="loginPass" type="password" placeholder="كلمة المرور" class="w-full p-3 mb-6 border rounded-lg">
+      <button onclick="adminLogin()" class="w-full bg-indigo-600 text-white p-3 rounded-lg font-bold hover:bg-indigo-700">دخول</button>
+    </div>
+  </div>
+
+  <div id="extraFilesModal" class="fixed inset-0 bg-black/60 hidden justify-center items-center z-[80] p-4 backdrop-blur-sm">
+    <div class="bg-white rounded-xl p-4 w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl">
+      <div class="flex justify-between items-center mb-3 border-b pb-3">
+        <h3 class="font-bold text-lg text-indigo-900">🎁 اختيار ملفات إضافية للباقة</h3>
+        <button onclick="closeExtraFilesModal()" class="text-gray-500 hover:text-gray-800 text-2xl leading-none">×</button>
+      </div>
+      <div class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2 mb-3">
+        💡 الملفات من المواد المُختارة أعلاه تُفتح تلقائياً. هنا اختر ملفات إضافية محددة من أي مادة.
+      </div>
+      <div class="flex gap-2 mb-3">
+        <input id="extraFilesSearch" type="text" placeholder="🔍 ابحث باسم الملف أو الدرس..." class="flex-1 p-2 border rounded-lg text-sm" oninput="filterExtraFiles()">
+        <select id="extraFilesSubjectFilter" class="p-2 border rounded-lg text-sm" onchange="filterExtraFiles()">
+          <option value="">كل المواد</option>
+        </select>
+      </div>
+      <div id="extraFilesList" class="flex-1 overflow-y-auto border rounded-lg p-2 bg-gray-50 min-h-[200px] max-h-[400px]"></div>
+      <div class="flex justify-between items-center mt-3 pt-3 border-t">
+        <div class="text-sm">تم اختيار: <span id="extraFilesCount" class="font-bold text-indigo-600 text-lg">0</span> ملف</div>
+        <div class="flex gap-2">
+          <button onclick="closeExtraFilesModal()" class="bg-gray-200 hover:bg-gray-300 px-4 py-2 rounded-lg font-bold">إلغاء</button>
+          <button onclick="saveExtraFilesSelection()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg font-bold">حفظ</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="extraFileEditModal" class="fixed inset-0 bg-black/60 hidden justify-center items-center z-[90] p-4 backdrop-blur-sm">
+    <div class="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl">
+      <div class="flex justify-between items-center mb-4 border-b pb-3">
+        <h3 class="font-bold text-lg text-indigo-900">✏️ إدارة الملف</h3>
+        <button onclick="closeExtraFileEditModal()" class="text-gray-400 hover:text-gray-700 text-2xl leading-none">×</button>
+      </div>
+      
+      <div class="space-y-4">
+        <div>
+          <label class="text-sm font-bold block mb-1 text-gray-700">📝 اسم الملف</label>
+          <input id="editExtraFileName" type="text" placeholder="اسم الملف" class="w-full p-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-indigo-500">
+        </div>
+        
+        <label class="flex items-center gap-3 p-3 border-2 rounded-lg cursor-pointer transition-colors hover:bg-amber-50">
+          <input id="editExtraFilePremium" type="checkbox" class="w-5 h-5 cursor-pointer" onchange="toggleEditPremiumPrice()">
+          <span class="font-bold text-sm">💰 مدفوع</span>
+        </label>
+        
+        <div id="editExtraFilePremiumPrice" style="display:none;">
+          <label class="text-sm font-bold block mb-1 text-gray-700">💵 السعر</label>
+          <input id="editExtraFilePrice" type="number" min="0" placeholder="مثلاً: 5000" class="w-full p-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-indigo-500">
+        </div>
+      </div>
+      
+      <div class="flex gap-2 mt-6">
+        <button onclick="saveExtraFileEdit()" class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white p-3 rounded-lg font-bold transition-colors">💾 حفظ</button>
+        <button onclick="closeExtraFileEditModal()" class="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-800 p-3 rounded-lg font-bold transition-colors">إلغاء</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="mainApp" class="max-w-5xl mx-auto hidden">
+    <div class="flex justify-between items-center mb-4">
+      <h1 class="text-2xl font-extrabold text-indigo-900">لوحة تحكم إنجاز</h1>
+      <button onclick="adminLogout()" class="bg-red-500 text-white px-4 py-2 rounded-lg text-sm">خروج</button>
+    </div>
+
+    <div class="flex gap-2 mb-6 bg-white p-2 rounded-xl shadow-sm overflow-x-auto whitespace-nowrap">
+      <button id="btn-lessons" onclick="showTab('lessons')" class="tab-btn flex-shrink-0 p-3 rounded-lg font-bold bg-indigo-900 text-white">📚 الدروس</button>
+      <button id="btn-training" onclick="showTab('training')" class="tab-btn flex-shrink-0 p-3 rounded-lg font-bold text-indigo-900 hover:bg-indigo-50">📄 النماذج الامتحانية</button>
+      <button id="btn-support" onclick="showTab('support')" class="tab-btn flex-shrink-0 p-3 rounded-lg font-bold text-indigo-900 hover:bg-indigo-50">📚 ملفات الدعم والتقوية</button>
+      <button id="btn-packages" onclick="showTab('packages')" class="tab-btn flex-shrink-0 p-3 rounded-lg font-bold text-indigo-900 hover:bg-indigo-50">📦 الباقات</button>
+      <button id="btn-students" onclick="showTab('students')" class="tab-btn flex-shrink-0 p-3 rounded-lg font-bold text-indigo-900 hover:bg-indigo-50">👥 الطلاب</button>
+      <button id="btn-codes" onclick="showTab('codes')" class="tab-btn flex-shrink-0 p-3 rounded-lg font-bold text-indigo-900 hover:bg-indigo-50">🎟️ الأكواد</button>
+      <button id="btn-recovery" onclick="showTab('recovery')" class="tab-btn flex-shrink-0 p-3 rounded-lg font-bold text-indigo-900 hover:bg-indigo-50">🔑 أكواد الاسترجاع</button>
+      <button id="btn-ads" onclick="showTab('ads')" class="tab-btn flex-shrink-0 p-3 rounded-lg font-bold text-indigo-900 hover:bg-indigo-50">📢 الإعلانات</button>
+      <button id="btn-exams" onclick="showTab('exams')" class="tab-btn flex-shrink-0 p-3 rounded-lg font-bold text-indigo-900 hover:bg-indigo-50">📄 الاختبارات (مهم جدا)</button>
+      <button id="btn-maintenance" onclick="showTab('maintenance')" class="tab-btn flex-shrink-0 p-3 rounded-lg font-bold text-indigo-900 hover:bg-indigo-50">🧹 الصيانة والتنظيف</button>
+      <button id="btn-settings" onclick="showTab('settings')" class="tab-btn flex-shrink-0 p-3 rounded-lg font-bold text-indigo-900 hover:bg-indigo-50">⚙️ الإعدادات</button>
+    </div>
+
+    <div id="training" class="tab-content hidden">
+      <div class="bg-white p-6 rounded-xl shadow-md border mb-8">
+        <h2 class="text-xl font-bold text-indigo-900 mb-4">📄 إضافة نموذج امتحاني أو تدريب</h2>
+        <div class="space-y-4">
+          <input id="trainingFileName" type="text" placeholder="اسم الملف (مثلاً: نموذج بكالوريا 2023)" class="w-full p-2 border rounded-lg">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <input id="trainingFileInput" type="file" accept=".html,.pdf" class="p-2 border rounded-lg text-sm">
+            <input id="trainingFileLink" type="text" placeholder="أو رابط خارجي (Drive)" class="p-2 border rounded-lg text-sm">
+          </div>
+          <div class="flex gap-2 items-center">
+            <input id="trainingFilePrice" type="number" min="0" placeholder="السعر" class="flex-1 p-2 border rounded-lg">
+            <label class="flex items-center gap-1 text-sm p-2 border rounded-lg"><input id="trainingFilePremium" type="checkbox"> مدفوع</label>
+          </div>
+          <button onclick="addExtraFile('training')" class="w-full bg-green-600 text-white p-3 rounded-lg font-bold">حفظ الملف</button>
+        </div>
+      </div>
+      <div class="bg-white p-6 rounded-xl shadow-md border">
+        <h3 class="font-bold text-lg text-indigo-900 mb-3">📋 الملفات الحالية</h3>
+        <div id="trainingFilesList"></div>
+      </div>
+    </div>
+
+    <div id="support" class="tab-content hidden">
+      <div class="bg-white p-6 rounded-xl shadow-md border mb-8">
+        <h2 class="text-xl font-bold text-indigo-900 mb-4">📚 إضافة ملف دعم وتقوية</h2>
+        <div class="space-y-4">
+          <input id="supportFileName" type="text" placeholder="اسم الملف (مثلاً: أنشطة يومية)" class="w-full p-2 border rounded-lg">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <input id="supportFileInput" type="file" accept=".html,.pdf" class="p-2 border rounded-lg text-sm">
+            <input id="supportFileLink" type="text" placeholder="أو رابط خارجي (Drive)" class="p-2 border rounded-lg text-sm">
+          </div>
+          <div class="flex gap-2 items-center">
+            <input id="supportFilePrice" type="number" min="0" placeholder="السعر" class="flex-1 p-2 border rounded-lg">
+            <label class="flex items-center gap-1 text-sm p-2 border rounded-lg"><input id="supportFilePremium" type="checkbox"> مدفوع</label>
+          </div>
+          <button onclick="addExtraFile('support')" class="w-full bg-green-600 text-white p-3 rounded-lg font-bold">حفظ الملف</button>
+        </div>
+      </div>
+      <div class="bg-white p-6 rounded-xl shadow-md border">
+        <h3 class="font-bold text-lg text-indigo-900 mb-3">📋 الملفات الحالية</h3>
+        <div id="supportFilesList"></div>
+      </div>
+    </div>
+
+    <div id="recovery" class="tab-content hidden">
+      <div class="bg-white p-6 rounded-xl shadow-md border mb-8">
+        <h2 class="text-xl font-bold text-indigo-900 mb-2">🔑 أكواد الاسترجاع</h2>
+        <p class="text-xs text-gray-500 mb-4">أكواد يستخدمها الزوار لاسترجاع مشترياتهم من أي جهاز آخر. حذف الكود يمنع صاحبه من الاسترجاع.</p>
+        <div id="recoveryCodesList"></div>
+      </div>
+    </div>
+
+    <div id="packages" class="tab-content hidden">
+      <div class="bg-white p-6 rounded-xl shadow-md border mb-8">
+        <h2 class="text-xl font-bold text-indigo-900 mb-4">📦 إدارة الباقات (3 بطاقات)</h2>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          
+          <div class="bg-gradient-to-br from-amber-50 to-yellow-50 p-4 rounded-xl border-2 border-amber-300">
+            <h3 class="font-bold text-lg mb-3 text-amber-800">👑 الباقة الذهبية</h3>
+            <input id="pkg1Title" type="text" placeholder="اسم الباقة" class="w-full p-2 border rounded-lg mb-2">
+            <textarea id="pkg1Desc" placeholder="وصف الباقة" class="w-full p-2 border rounded-lg mb-2 text-sm" rows="3"></textarea>
+            <input id="pkg1Price" type="text" placeholder="السعر" class="w-full p-2 border rounded-lg mb-2">
+            <label class="flex items-center gap-2 bg-amber-100 p-3 rounded-lg border-2 border-amber-300 cursor-pointer mb-2">
+              <input id="pkg1IncludeAllPaid" type="checkbox" class="w-5 h-5" checked onchange="togglePkg1Custom()">
+              <span class="font-bold text-amber-800 text-sm">👑 يشمل جميع الملفات المدفوعة</span>
+            </label>
+            <div id="pkg1CustomSection" style="display:none;">
+              <div class="mt-2"><label class="text-sm font-bold block mb-1">المواد المشمولة:</label><div id="pkg1Subjects" class="grid grid-cols-2 gap-1 p-2 border rounded-lg bg-white text-xs"></div></div>
+              <div class="mt-2">
+                <button type="button" onclick="openExtraFilesModal('pkg1')" class="w-full bg-amber-50 border border-amber-300 text-amber-800 p-2 rounded-lg text-sm font-bold hover:bg-amber-100">
+                  🎁 ملفات إضافية (<span id="pkg1ExtraCount">0</span>)
+                </button>
+              </div>
+            </div>
+            <div class="mt-3 bg-white p-2 rounded-lg border">
+              <label class="text-xs font-bold block mb-1">🎨 ألوان الباقة:</label>
+              <div class="grid grid-cols-1 gap-2">
+                <div>
+                  <label class="text-[10px] block mb-1">الإطار</label>
+                  <div class="flex gap-1">
+                    <input id="pkg1BorderColor" type="color" value="#fbbf24" class="w-10 h-7 border rounded cursor-pointer flex-shrink-0" oninput="syncColorToHex('pkg1BorderColor')">
+                    <input id="pkg1BorderColorHex" type="text" value="#fbbf24" maxlength="7" placeholder="#ffffff" class="flex-1 min-w-0 h-7 px-2 border rounded text-xs font-mono" oninput="syncHexToColor('pkg1BorderColor')">
+                  </div>
+                </div>
+                <div>
+                  <label class="text-[10px] block mb-1">الخلفية</label>
+                  <div class="flex gap-1">
+                    <input id="pkg1BgColor" type="color" value="#fffbeb" class="w-10 h-7 border rounded cursor-pointer flex-shrink-0" oninput="syncColorToHex('pkg1BgColor')">
+                    <input id="pkg1BgColorHex" type="text" value="#fffbeb" maxlength="7" placeholder="#ffffff" class="flex-1 min-w-0 h-7 px-2 border rounded text-xs font-mono" oninput="syncHexToColor('pkg1BgColor')">
+                  </div>
+                </div>
+                <div>
+                  <label class="text-[10px] block mb-1">الزر</label>
+                  <div class="flex gap-1">
+                    <input id="pkg1ButtonColor" type="color" value="#f59e0b" class="w-10 h-7 border rounded cursor-pointer flex-shrink-0" oninput="syncColorToHex('pkg1ButtonColor')">
+                    <input id="pkg1ButtonColorHex" type="text" value="#f59e0b" maxlength="7" placeholder="#ffffff" class="flex-1 min-w-0 h-7 px-2 border rounded text-xs font-mono" oninput="syncHexToColor('pkg1ButtonColor')">
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <div class="bg-gray-50 p-4 rounded-xl border">
+            <h3 class="font-bold text-lg mb-3 text-indigo-800">📦 الباقة الثانية <span class="text-xs text-orange-500">🔥 الأكثر طلباً</span></h3>
+            <input id="pkg2Title" type="text" placeholder="اسم الباقة" class="w-full p-2 border rounded-lg mb-2">
+            <textarea id="pkg2Desc" placeholder="وصف الباقة" class="w-full p-2 border rounded-lg mb-2 text-sm" rows="3"></textarea>
+            <input id="pkg2Price" type="text" placeholder="السعر" class="w-full p-2 border rounded-lg mb-2">
+            <div class="mt-2"><label class="text-sm font-bold block mb-1">المواد المشمولة:</label><div id="pkg2Subjects" class="grid grid-cols-2 gap-1 p-2 border rounded-lg bg-white text-xs"></div></div>
+            <div class="mt-2">
+              <button type="button" onclick="openExtraFilesModal('pkg2')" class="w-full bg-amber-50 border border-amber-300 text-amber-800 p-2 rounded-lg text-sm font-bold hover:bg-amber-100">
+                🎁 ملفات إضافية (<span id="pkg2ExtraCount">0</span>)
+              </button>
+            </div>
+            <div class="mt-3 bg-white p-2 rounded-lg border">
+              <label class="text-xs font-bold block mb-1">🎨 ألوان الباقة:</label>
+              <div class="grid grid-cols-1 gap-2">
+                <div>
+                  <label class="text-[10px] block mb-1">الإطار</label>
+                  <div class="flex gap-1">
+                    <input id="pkg2BorderColor" type="color" value="#fb923c" class="w-10 h-7 border rounded cursor-pointer flex-shrink-0" oninput="syncColorToHex('pkg2BorderColor')">
+                    <input id="pkg2BorderColorHex" type="text" value="#fb923c" maxlength="7" placeholder="#ffffff" class="flex-1 min-w-0 h-7 px-2 border rounded text-xs font-mono" oninput="syncHexToColor('pkg2BorderColor')">
+                  </div>
+                </div>
+                <div>
+                  <label class="text-[10px] block mb-1">الخلفية</label>
+                  <div class="flex gap-1">
+                    <input id="pkg2BgColor" type="color" value="#ffffff" class="w-10 h-7 border rounded cursor-pointer flex-shrink-0" oninput="syncColorToHex('pkg2BgColor')">
+                    <input id="pkg2BgColorHex" type="text" value="#ffffff" maxlength="7" placeholder="#ffffff" class="flex-1 min-w-0 h-7 px-2 border rounded text-xs font-mono" oninput="syncHexToColor('pkg2BgColor')">
+                  </div>
+                </div>
+                <div>
+                  <label class="text-[10px] block mb-1">الزر</label>
+                  <div class="flex gap-1">
+                    <input id="pkg2ButtonColor" type="color" value="#f97316" class="w-10 h-7 border rounded cursor-pointer flex-shrink-0" oninput="syncColorToHex('pkg2ButtonColor')">
+                    <input id="pkg2ButtonColorHex" type="text" value="#f97316" maxlength="7" placeholder="#ffffff" class="flex-1 min-w-0 h-7 px-2 border rounded text-xs font-mono" oninput="syncHexToColor('pkg2ButtonColor')">
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <div class="bg-gray-50 p-4 rounded-xl border">
+            <h3 class="font-bold text-lg mb-3 text-indigo-800">📦 الباقة الثالثة</h3>
+            <input id="pkg3Title" type="text" placeholder="اسم الباقة" class="w-full p-2 border rounded-lg mb-2">
+            <textarea id="pkg3Desc" placeholder="وصف الباقة" class="w-full p-2 border rounded-lg mb-2 text-sm" rows="3"></textarea>
+            <input id="pkg3Price" type="text" placeholder="السعر" class="w-full p-2 border rounded-lg mb-2">
+            <div class="mt-2"><label class="text-sm font-bold block mb-1">المواد المشمولة:</label><div id="pkg3Subjects" class="grid grid-cols-2 gap-1 p-2 border rounded-lg bg-white text-xs"></div></div>
+            <div class="mt-2">
+              <button type="button" onclick="openExtraFilesModal('pkg3')" class="w-full bg-amber-50 border border-amber-300 text-amber-800 p-2 rounded-lg text-sm font-bold hover:bg-amber-100">
+                🎁 ملفات إضافية (<span id="pkg3ExtraCount">0</span>)
+              </button>
+            </div>
+            <div class="mt-3 bg-white p-2 rounded-lg border">
+              <label class="text-xs font-bold block mb-1">🎨 ألوان الباقة:</label>
+              <div class="grid grid-cols-1 gap-2">
+                <div>
+                  <label class="text-[10px] block mb-1">الإطار</label>
+                  <div class="flex gap-1">
+                    <input id="pkg3BorderColor" type="color" value="#fdba74" class="w-10 h-7 border rounded cursor-pointer flex-shrink-0" oninput="syncColorToHex('pkg3BorderColor')">
+                    <input id="pkg3BorderColorHex" type="text" value="#fdba74" maxlength="7" placeholder="#ffffff" class="flex-1 min-w-0 h-7 px-2 border rounded text-xs font-mono" oninput="syncHexToColor('pkg3BorderColor')">
+                  </div>
+                </div>
+                <div>
+                  <label class="text-[10px] block mb-1">الخلفية</label>
+                  <div class="flex gap-1">
+                    <input id="pkg3BgColor" type="color" value="#ffffff" class="w-10 h-7 border rounded cursor-pointer flex-shrink-0" oninput="syncColorToHex('pkg3BgColor')">
+                    <input id="pkg3BgColorHex" type="text" value="#ffffff" maxlength="7" placeholder="#ffffff" class="flex-1 min-w-0 h-7 px-2 border rounded text-xs font-mono" oninput="syncHexToColor('pkg3BgColor')">
+                  </div>
+                </div>
+                <div>
+                  <label class="text-[10px] block mb-1">الزر</label>
+                  <div class="flex gap-1">
+                    <input id="pkg3ButtonColor" type="color" value="#4f46e5" class="w-10 h-7 border rounded cursor-pointer flex-shrink-0" oninput="syncColorToHex('pkg3ButtonColor')">
+                    <input id="pkg3ButtonColorHex" type="text" value="#4f46e5" maxlength="7" placeholder="#ffffff" class="flex-1 min-w-0 h-7 px-2 border rounded text-xs font-mono" oninput="syncHexToColor('pkg3ButtonColor')">
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <button onclick="savePackages()" class="w-full bg-indigo-600 text-white p-3 rounded-lg font-bold mt-4">حفظ الباقات</button>
+      </div>
+    </div>
+
+    <div id="students" class="tab-content hidden">
+      <div class="bg-white p-6 rounded-xl shadow-md border mb-8">
+        <h2 class="text-xl font-bold text-indigo-900 mb-4">👥 الطلاب المسجلون</h2>
+        <div id="studentsList"></div>
+      </div>
+    </div>
+
+    <div id="codes" class="tab-content hidden">
+      <div class="bg-white p-6 rounded-xl shadow-md border mb-8">
+        <h2 class="text-xl font-bold text-indigo-900 mb-4">🎟️ أكواد التفعيل</h2>
+        <div class="flex flex-col md:flex-row gap-2 mb-4">
+          <button id="btn-type-package" onclick="selectCodeType('package')" class="flex-1 p-3 rounded-lg font-bold border bg-indigo-600 text-white border-indigo-600">📦 كود لباقة</button>
+          <button id="btn-type-cart" onclick="selectCodeType('cart')" class="flex-1 p-3 rounded-lg font-bold border bg-white text-indigo-900 hover:bg-indigo-50 border-gray-300">🛒 كود لفتح السلة</button>
+        </div>
+        <div class="bg-gray-50 p-4 rounded-lg border mb-4">
+          <div id="packageSelector">
+            <label class="text-sm font-bold mb-2 block">اختر الباقة:</label>
+            <select id="codeTargetPackage" class="w-full p-2 border rounded-lg mb-3"></select>
+          </div>
+          <div class="flex flex-col md:flex-row gap-2">
+            <button onclick="generateCode(1, this)" class="flex-1 bg-green-600 text-white p-3 rounded-lg font-bold">+ توليد كود جديد</button>
+            <button onclick="generateCode(10, this)" class="flex-1 bg-blue-600 text-white p-3 rounded-lg font-bold">+ توليد 10 أكواد</button>
+          </div>
+        </div>
+        <h3 class="font-bold mb-2">الأكواد المولدة:</h3>
+        <div id="codesList"></div>
+      </div>
+    </div>
+
+    <div id="maintenance" class="tab-content hidden space-y-6">
+      
+      <!-- إحصائيات المبيعات والأرباح -->
+      <div class="bg-white p-6 rounded-xl shadow-md border border-indigo-200">
+        <div class="flex justify-between items-center mb-4">
+          <h2 class="text-xl font-bold text-indigo-900">💰 إحصائيات المبيعات والأرباح</h2>
+          <button id="btn-load-sales" onclick="loadSalesStats()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-bold text-sm transition-colors">🔄 حساب إحصائيات المبيعات</button>
+        </div>
+        
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-center mb-6">
+          <div class="bg-indigo-50 p-4 rounded-lg border border-indigo-200">
+            <p class="text-3xl font-extrabold text-indigo-700" id="stat-revenue">0</p>
+            <p class="text-sm text-gray-600 mt-1">إجمالي الإيرادات التقريبية (ل.س)</p>
+          </div>
+          <div class="bg-emerald-50 p-4 rounded-lg border border-emerald-200">
+            <p class="text-3xl font-extrabold text-emerald-700" id="stat-files-sold">0</p>
+            <p class="text-sm text-gray-600 mt-1">ملفات مباعة (فردي)</p>
+          </div>
+          <div class="bg-amber-50 p-4 rounded-lg border border-amber-200">
+            <p class="text-3xl font-extrabold text-amber-700" id="stat-pkgs-sold">0</p>
+            <p class="text-sm text-gray-600 mt-1">باقات مباعة</p>
+          </div>
+        </div>
+
+        <div class="mt-4">
+          <h3 class="font-bold text-gray-800 mb-2 flex items-center gap-2"><i class="fas fa-fire text-orange-500"></i> الأكثر مبيعاً (Top 5):</h3>
+          <div id="top-files-list" class="space-y-1">
+            <p class="text-gray-400 text-sm">اضغط على زر "حساب إحصائيات المبيعات" بالأعلى.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- الإحصائيات العامة -->
+      <div class="bg-white p-6 rounded-xl shadow-md border">
+        <h2 class="text-xl font-bold text-indigo-900 mb-4">📊 إحصائيات قاعدة البيانات</h2>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-center mb-4">
+          <div class="bg-blue-50 p-4 rounded-lg border border-blue-200">
+            <p class="text-3xl font-extrabold text-blue-600" id="stat-db-lessons">0</p>
+            <p class="text-sm text-gray-600 mt-1">درس</p>
+          </div>
+          <div class="bg-emerald-50 p-4 rounded-lg border border-emerald-200">
+            <p class="text-3xl font-extrabold text-emerald-600" id="stat-db-files">0</p>
+            <p class="text-sm text-gray-600 mt-1">ملف</p>
+          </div>
+          <div class="bg-purple-50 p-4 rounded-lg border border-purple-200">
+            <p class="text-3xl font-extrabold text-purple-600" id="stat-db-users">0</p>
+            <p class="text-sm text-gray-600 mt-1">مستخدم</p>
+          </div>
+          <div class="bg-amber-50 p-4 rounded-lg border border-amber-200">
+            <p class="text-3xl font-extrabold text-amber-600" id="stat-db-codes">0</p>
+            <p class="text-sm text-gray-600 mt-1">كود تفعيل</p>
+          </div>
+        </div>
+        <button onclick="loadMaintenanceStats()" class="w-full bg-gray-100 text-gray-700 hover:bg-gray-200 p-2 rounded-lg font-bold text-sm transition-colors">🔄 تحديث الإحصائيات العامة</button>
+      </div>
+
+      <!-- تصدير البيانات -->
+      <div class="bg-white p-6 rounded-xl shadow-md border">
+        <h2 class="text-xl font-bold text-indigo-900 mb-2">📥 تصدير البيانات (نسخة احتياطية)</h2>
+        <p class="text-sm text-gray-500 mb-4">قم بتنزيل نسخة من بيانات الأكواد والطلاب لمراجعتها في Excel.</p>
+        
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <button onclick="exportCodesCSV()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white p-3 rounded-lg font-bold transition-colors">📥 تصدير الأكواد (Excel)</button>
+          <button onclick="exportUsersCSV()" class="w-full bg-blue-600 hover:bg-blue-700 text-white p-3 rounded-lg font-bold transition-colors">📥 تصدير الطلاب (Excel)</button>
+        </div>
+      </div>
+
+      <!-- أدوات التنظيف المتقدمة -->
+      <div class="bg-white p-6 rounded-xl shadow-md border">
+        <h2 class="text-xl font-bold text-red-600 mb-2">⚠️ أدوات التنظيف المتقدمة</h2>
+        <p class="text-sm text-gray-500 mb-6">هذه العمليات لا يمكن التراجع عنها. تأكد من أخذ نسخة احتياطية (تصدير) قبل التنظيف.</p>
+        
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          
+          <!-- تنظيف الحسابات والملفات المعلقة -->
+          <div class="border-2 border-red-200 rounded-lg p-4">
+            <h3 class="font-bold text-red-700 mb-2">👻 الحسابات والملفات المعلقة</h3>
+            <p class="text-xs text-gray-500 mb-4">حذف الحسابات الوهمية التي لم تشترِ، والملفات التي حُذفت دروسها.</p>
+            <button onclick="cleanInactiveGuests()" class="w-full bg-red-500 hover:bg-red-600 text-white p-2 rounded-lg font-bold text-sm mb-2 transition-colors">👻 حذف الزوار الخاملين</button>
+            <button onclick="cleanOrphanedFiles()" class="w-full bg-red-600 hover:bg-red-700 text-white p-2 rounded-lg font-bold text-sm transition-colors">🧹 حذف الملفات المعلقة</button>
+          </div>
+
+          <!-- تنظيف الأكواد -->
+          <div class="border-2 border-red-200 rounded-lg p-4">
+            <h3 class="font-bold text-red-700 mb-2">🎟️ أكواد التفعيل والاسترجاع</h3>
+            <p class="text-xs text-gray-500 mb-4">حذف الأكواد المستخدمة واليتيمة لتوفير مساحة الاستعلام.</p>
+            <button onclick="cleanUsedCodes()" class="w-full bg-red-500 hover:bg-red-600 text-white p-2 rounded-lg font-bold text-sm mb-2 transition-colors">🗑️ حذف الأكواد المستخدمة</button>
+            <button onclick="cleanRecoveryCodes()" class="w-full bg-red-600 hover:bg-red-700 text-white p-2 rounded-lg font-bold text-sm mb-2 transition-colors">🗑️ حذف أكواد الاسترجاع (اليتيمة)</button>
+            <button onclick="cleanAllCodes()" class="w-full bg-red-800 hover:bg-red-900 text-white p-2 rounded-lg font-bold text-sm transition-colors">🚨 حذف جميع الأكواد</button>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <div id="settings" class="tab-content hidden space-y-6">
+      <div class="bg-white p-6 rounded-xl shadow-md border">
+        <h2 class="text-xl font-bold text-indigo-900 mb-4">💵 إعدادات العرض والعملة</h2>
+        <label class="text-sm font-bold">نوع العملة</label>
+        <input id="currencyType" type="text" placeholder="ل.س / $ / ريال" class="w-full p-2 border rounded-lg mb-4 mt-1">
+        <label class="text-sm font-bold">شفافية خلفية الهيدر (0 - 100)</label>
+        <input id="headerOpacity" type="number" min="0" max="100" value="30" class="w-full p-2 border rounded-lg mb-4 mt-1">
+        
+        <label class="text-sm font-bold">لون خلفية الشريط المتحرك</label>
+        <div class="flex gap-2 items-center mb-4 mt-1">
+          <input id="marqueeBgColor" type="color" value="#f97316" class="w-16 h-10 p-1 border rounded-lg cursor-pointer" oninput="syncColorToHex('marqueeBgColor')">
+          <input id="marqueeBgColorHex" type="text" value="#f97316" maxlength="7" placeholder="#f97316" class="flex-1 h-10 p-2 border rounded-lg font-mono text-sm" oninput="syncHexToColor('marqueeBgColor')">
+        </div>
+        
+        <button onclick="saveDisplaySettings()" class="w-full bg-indigo-600 text-white p-3 rounded-lg font-bold">حفظ إعدادات العرض</button>
+      </div>
+
+      <div class="bg-white p-6 rounded-xl shadow-md border">
+        <h2 class="text-xl font-bold text-indigo-900 mb-4">🔄 شريط النصوص المتحرك</h2>
+        <input id="marqueeText" type="text" placeholder="اكتب نص الإعلان هنا..." class="w-full p-2 border rounded-lg mb-3">
+        <div class="grid grid-cols-2 gap-4 mb-3">
+          <div><label class="text-sm font-bold">سرعة الحركة (ثانية)</label><input id="marqueeSpeed" type="number" value="15" min="5" max="60" class="w-full p-2 border rounded-lg mt-1"></div>
+          <div><label class="text-sm font-bold">لون الخط</label><input id="marqueeColor" type="color" value="#f97316" class="w-full h-10 p-1 border rounded-lg mt-1"></div>
+        </div>
+        <button onclick="saveMarquee()" class="w-full bg-indigo-600 text-white p-3 rounded-lg font-bold">حفظ إعدادات الشريط</button>
+      </div>
+      
+      <div class="bg-white p-6 rounded-xl shadow-md border">
+        <h2 class="text-xl font-bold text-indigo-900 mb-4">🖼️ صور السلايدر</h2>
+        <input id="sliderFile" type="file" accept="image/*" class="w-full p-2 border rounded-lg mb-3">
+        <button onclick="uploadSlide()" class="bg-blue-600 text-white p-3 rounded-lg mb-4 w-full font-bold">رفع صورة</button>
+        <div id="sliderList" class="grid grid-cols-3 gap-2"></div>
+      </div>
+      
+      <div class="bg-white p-6 rounded-xl shadow-md border">
+        <h2 class="text-xl font-bold text-indigo-900 mb-4">🎨 خلفية الهيدر</h2>
+        <img id="currentHeaderBg" src="" class="hidden w-full h-32 object-cover rounded-lg border mb-2">
+        <input id="headerBgFile" type="file" accept="image/*" class="w-full p-2 border rounded-lg mb-3">
+        <button onclick="saveHeader()" class="w-full bg-indigo-600 text-white p-3 rounded-lg font-bold">حفظ خلفية الهيدر</button>
+      </div>
+    </div>
+
+    <div id="lessons" class="tab-content">
+      <div class="bg-white p-6 rounded-xl shadow-md border mb-8">
+        <h2 class="text-xl font-bold text-indigo-900 mb-4">➕ إضافة درس جديد</h2>
+        <div class="space-y-4">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <select id="subject" class="w-full p-2 border rounded-lg">
+              <option>رياضيات</option><option>الفيزياء</option><option>الكيمياء</option><option>العلوم</option>
+              <option>اللغة العربية</option><option>اللغة الانكليزية</option><option>اللغةالفرنسية</option><option>التربية الاسلامية</option>
+            </select>
+            <input id="title" type="text" class="w-full p-2 border rounded-lg" placeholder="عنوان الدرس">
+          </div>
+          <div class="space-y-3 bg-gray-50 p-4 rounded-lg border">
+            <h3 class="font-bold text-indigo-800">ملحقات الدرس (4 ملفات كحد أقصى)</h3>
+            <div id="fileInputsContainer"></div>
+          </div>
+          <button onclick="adminAddLesson()" class="w-full bg-green-600 text-white p-3 rounded-lg font-bold">حفظ الدرس</button>
+        </div>
+      </div>
+      <div class="bg-white p-6 rounded-xl shadow-md border"><div id="lessonsList"></div></div>
+    </div>
+
+    <div id="filesModal" class="fixed inset-0 bg-black bg-opacity-50 hidden justify-center items-center z-50 p-4">
+      <div class="bg-white p-6 rounded-xl w-full md:w-1/2 max-h-[90vh] overflow-y-auto mx-auto my-10">
+        <h3 class="text-xl font-bold mb-4 text-indigo-900">إدارة الدرس</h3>
+        <div class="flex gap-2 mb-4">
+          <input id="editLessonTitle" type="text" class="w-full p-2 border rounded-lg">
+          <button onclick="saveLessonTitle()" class="bg-blue-600 text-white p-2 rounded-lg">حفظ العنوان</button>
+        </div>
+        
+        <div class="mb-6">
+          <h4 class="font-bold text-md mb-2 text-gray-700">الملفات الحالية</h4>
+          <div id="filesList"></div>
+        </div>
+
+        <div class="bg-gray-50 p-4 rounded-lg border mb-4">
+          <h4 class="font-bold text-md mb-3 text-indigo-800">➕ إضافة ملف جديد لهذا الدرس</h4>
+          <input id="newFileName" type="text" placeholder="اسم الملف الجديد" class="w-full p-2 border rounded-lg mb-2 text-sm">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mb-2">
+            <input id="newFileInput" type="file" accept=".html,.pdf" class="p-1 border rounded text-sm">
+            <input id="newFileLink" type="text" placeholder="رابط خارجي (Drive)" class="p-2 border rounded text-sm">
+          </div>
+          <div class="flex gap-2 items-center">
+            <input id="newFilePrice" type="number" min="0" placeholder="السعر" class="flex-1 p-2 border rounded text-sm">
+            <label class="flex items-center gap-1 text-sm p-2 border rounded"><input id="newFileIsPremium" type="checkbox"> مدفوع</label>
+          </div>
+          <button onclick="addNewFileToLesson()" class="w-full bg-green-600 text-white p-2 rounded-lg mt-3 font-bold text-sm">إضافة الملف</button>
+        </div>
+
+        <button onclick="closeFilesModal()" class="bg-gray-300 w-full p-2 rounded-lg mt-2">إغلاق</button>
+      </div>
+    </div>
+
+    <div id="ads" class="tab-content hidden">
+      <div class="bg-white p-6 rounded-xl shadow-md border mb-8">
+        <h2 class="text-xl font-bold text-indigo-900 mb-4">📢 إضافة إعلان</h2>
+        <input id="adTitle" type="text" class="w-full p-2 border rounded-lg mb-3" placeholder="عنوان">
+        <input id="adImageFile" type="file" accept="image/*" class="w-full p-2 border rounded-lg mb-3">
+        <input id="adVideoFile" type="file" accept="video/*" class="w-full p-2 border rounded-lg mb-3">
+        <button onclick="adminAddAd()" class="w-full bg-indigo-600 text-white p-3 rounded-lg">حفظ</button>
+      </div>
+      <div class="bg-white p-6 rounded-xl shadow-md border"><div id="adsList"></div></div>
+    </div>
+
+    <div id="exams" class="tab-content hidden">
+      <div class="bg-white p-6 rounded-xl shadow-md border mb-8">
+        <h2 class="text-xl font-bold text-indigo-900 mb-4">📄 رفع اختبار (مهم جدا)</h2>
+        <input id="examTitle" type="text" class="w-full p-2 border rounded-lg mb-3" placeholder="اسم الملف">
+        <input id="examFile" type="file" class="w-full p-2 border rounded-lg mb-3">
+        <input id="examLink" type="text" class="w-full p-2 border rounded-lg mb-3" placeholder="رابط خارجي">
+        <button onclick="adminAddExam()" class="w-full bg-indigo-600 text-white p-3 rounded-lg">رفع</button>
+      </div>
+      <div class="bg-white p-6 rounded-xl shadow-md border"><div id="examsList"></div></div>
+    </div>
+  </div>
+</body>
+</html>
