@@ -1,0 +1,26 @@
+{
+  "name": "منصة إنجاز الأكاديمية",
+  "short_name": "إنجاز",
+  "description": "بنك الملفات التعليمية - البكالوريا العلمي",
+  "start_url": "./app.html",
+  "display": "standalone",
+  "background_color": "#1e1b4b",
+  "theme_color": "#4f46e5",
+  "orientation": "portrait",
+  "dir": "rtl",
+  "lang": "ar",
+  "icons": [
+    {
+      "src": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxOTIgMTkyIj48cmVjdCB3aWR0aD0iMTkyIiBoZWlnaHQ9IjE5MiIgcng9IjQwIiBmaWxsPSIjNGY0NmU1Ii8+PHBhdGggZD0iTTk2IDQwTDQwIDcybDU2IDMyIDU2LTMyLTU2LTMyem0wIDQ4TDQwIDU2djQwbDU2IDMyIDU2LTMyVjU2bC01NiAzMnptMCA1NnYtNDBsLTQwLTIzLjV2NDBsNDAgMjMuNXoiIGZpbGw9IiNmZmYiLz48L3N2Zz4=",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIj48cmVjdCB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgcng9IjEwMCIgZmlsbD0iIzRmNDZlNSIvPjxwYXRoIGQ9Ik0yNTYgMTIwTDEwMCAyMDBsMTU2IDgwIDE1Ni04MC0xNTYtODB6bTAgMTIwTDEwMCAyNDB2ODBsMTU2IDgwIDE1Ni04MHYtODBsLTE1NiA4MHptMCAxNDB2LTgwbC0xMDAtNTd2ODBsMTAwIDU3eiIgZmlsbD0iI2ZmZiIvPjwvc3ZnPg==",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
