@@ -18,7 +18,7 @@
 
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
-  import { getFirestore, collection, onSnapshot, doc, getDoc, query, where, setDoc, updateDoc, getDocs, deleteDoc, documentId } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
+import { initializeFirestore, persistentLocalCache, persistentSingleTabManager, collection, onSnapshot, doc, getDoc, query, where, setDoc, updateDoc, getDocs, deleteDoc, documentId } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
   import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence, signInAnonymously } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js";
 
   const firebaseConfig = {
@@ -32,7 +32,9 @@
   };
 
   const app = initializeApp(firebaseConfig);
-  const db = getFirestore(app);
+  const db = initializeFirestore(app, {
+  localCache: persistentLocalCache({ tabManager: persistentSingleTabManager() })
+});
   const auth = getAuth(app);
   setPersistence(auth, browserLocalPersistence).catch(e => console.warn('persistence:', e));
 
