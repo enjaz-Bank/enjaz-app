@@ -4,9 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
 <title>منصة إنجاز الأكاديمية</title>
-<!-- ✅ PWA Setup -->
-<meta name="theme-color" content="#4f46e5">
-<link rel="manifest" href="./manifest.json">
 
 <meta http-equiv="Content-Security-Policy" content="default-src * 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https:; frame-src * 'self' https: data: blob:; img-src * 'self' data: blob: https:; media-src * 'self' data: blob: https:; connect-src * https: wss:;">
 
@@ -18,7 +15,7 @@
 
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
-import { initializeFirestore, persistentLocalCache, persistentSingleTabManager, collection, onSnapshot, doc, getDoc, query, where, setDoc, updateDoc, getDocs, deleteDoc, documentId } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
+  import { initializeFirestore, persistentLocalCache, persistentSingleTabManager, collection, onSnapshot, doc, getDoc, query, where, setDoc, updateDoc, getDocs, deleteDoc, documentId } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
   import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence, signInAnonymously } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js";
 
   const firebaseConfig = {
@@ -32,9 +29,12 @@ import { initializeFirestore, persistentLocalCache, persistentSingleTabManager, 
   };
 
   const app = initializeApp(firebaseConfig);
+  
+  // ✅ تفعيل وضع الأوفلاين للتخزين المحلي
   const db = initializeFirestore(app, {
-  localCache: persistentLocalCache({ tabManager: persistentSingleTabManager() })
-});
+    localCache: persistentLocalCache({ tabManager: persistentSingleTabManager() })
+  });
+  
   const auth = getAuth(app);
   setPersistence(auth, browserLocalPersistence).catch(e => console.warn('persistence:', e));
 
@@ -998,6 +998,66 @@ import { initializeFirestore, persistentLocalCache, persistentSingleTabManager, 
     }
   };
 
+  // ✅ جديد: دالة تحميل جميع الملفات للدراسة أوفلاين
+  window.downloadAllPurchasedFiles = async function() {
+    if (!currentUser) return;
+
+    let purchased = currentUserData?.purchasedFiles || [];
+    let pkgFiles = Array.from(userAccessCache.extraFileIds || []);
+    let allIds = [...new Set([...purchased, ...pkgFiles])];
+
+    if (allIds.length === 0) {
+      alert("لا توجد ملفات للتحميل.");
+      return;
+    }
+
+    const btn = document.getElementById('downloadAllBtn');
+    const statusText = document.getElementById('downloadStatusText');
+
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> جاري التحميل...'; }
+    if (statusText) { statusText.classList.remove('hidden'); statusText.innerText = `جاري تحضير الملفات... (0/${allIds.length})`; }
+
+    let downloadedCount = 0;
+    const chunkSize = 30;
+    const chunks = [];
+    for (let i = 0; i < allIds.length; i += chunkSize) chunks.push(allIds.slice(i, i + chunkSize));
+
+    try {
+      for (const chunk of chunks) {
+        const filesQ = query(collection(db, "files"), where(documentId(), "in", chunk));
+        const filesSnap = await getDocs(filesQ);
+        let foundIds = new Set();
+        filesSnap.forEach(d => foundIds.add(d.id));
+
+        const remaining = chunk.filter(id => !foundIds.has(id));
+        if (remaining.length > 0) {
+          const extraQ = query(collection(db, "extraFiles"), where(documentId(), "in", remaining));
+          await getDocs(extraQ);
+        }
+
+        downloadedCount += chunk.length;
+        if (statusText) statusText.innerText = `جاري تحميل الملفات... (${downloadedCount}/${allIds.length})`;
+      }
+
+      if (statusText) {
+        statusText.innerText = "✅ تم تحميل جميع الملفات بنجاح! يمكنك الآن تصفحها بدون إنترنت.";
+        statusText.classList.replace('text-blue-600', 'text-emerald-600');
+        statusText.classList.replace('dark:text-blue-400', 'dark:text-emerald-400');
+      }
+      if (btn) { btn.innerHTML = '<i class="fas fa-check"></i> تم التحميل بنجاح'; btn.classList.replace('bg-blue-600', 'bg-emerald-600'); }
+
+      setTimeout(() => {
+         if(btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-download"></i> تحميل جميع الملفات للدراسة أوفلاين'; btn.classList.replace('bg-emerald-600', 'bg-blue-600'); }
+         if(statusText) { statusText.classList.add('hidden'); statusText.classList.replace('text-emerald-600', 'text-blue-600'); statusText.classList.replace('dark:text-emerald-400', 'dark:text-blue-400'); }
+      }, 5000);
+
+    } catch (error) {
+      console.error("Download error:", error);
+      if (statusText) statusText.innerText = "❌ حدث خطأ أثناء التحميل. يرجى التأكد من اتصالك بالإنترنت.";
+      if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-download"></i> تحميل جميع الملفات للدراسة أوفلاين'; }
+    }
+  };
+
   window.loadLibrary = async function() {
     const c = document.getElementById('libraryList');
     
@@ -1037,7 +1097,6 @@ import { initializeFirestore, persistentLocalCache, persistentSingleTabManager, 
         <i class="fas fa-key"></i> استرجاع مشتريات من جهاز آخر
       </button>`;
 
-      // ✅ جديد: زر عرض كود الاسترجاع (يظهر فقط لمن لديه كود)
       if (currentUserData?.recoveryCode) {
         html += `<button onclick="window.showRecoveryCodePopup('${currentUserData.recoveryCode}')" class="w-full bg-gradient-to-l from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white py-3 rounded-xl font-bold text-sm shadow-md active:scale-95 transition-transform mb-4 flex items-center justify-center gap-2">
           <i class="fas fa-eye"></i> عرض كود الاسترجاع الخاص بي
@@ -1079,6 +1138,18 @@ import { initializeFirestore, persistentLocalCache, persistentSingleTabManager, 
           </div>
         </div>
       </div>`;
+
+      // ✅ إضافة زر تحميل الكل للزوار
+      html += `
+        <div class="bg-gradient-to-l from-blue-50 to-indigo-50 dark:from-slate-800 dark:to-slate-700 p-4 rounded-2xl shadow-md border border-blue-200 dark:border-slate-600 mb-4 text-center">
+          <h4 class="font-bold text-blue-700 dark:text-blue-300 mb-2">📥 هل تريد الدراسة بدون إنترنت؟</h4>
+          <p class="text-xs text-gray-600 dark:text-gray-400 mb-3">قم بتحميل جميع ملفاتك الآن لتتمكن من فتحها في أي وقت بدون اتصال.</p>
+          <button onclick="downloadAllPurchasedFiles()" id="downloadAllBtn" class="w-full bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-xl font-bold text-sm shadow-md transition-colors flex items-center justify-center gap-2">
+            <i class="fas fa-download"></i> تحميل جميع الملفات للدراسة أوفلاين
+          </button>
+          <div id="downloadStatusText" class="text-xs text-blue-600 dark:text-blue-400 mt-2 hidden font-bold"></div>
+        </div>
+      `;
 
       const guestFiles = await fetchFilesFromAnyCollection(purchasedFiles);
       
@@ -1168,6 +1239,23 @@ import { initializeFirestore, persistentLocalCache, persistentSingleTabManager, 
       html += `</div>`;
     }
 
+    const individualPurchases = purchasedFiles.filter(fid => !allExtraFileIds.has(fid));
+    const totalFilesCount = purchasedFiles.length + allExtraFileIds.size;
+
+    // ✅ إضافة زر تحميل الكل للمستخدم المسجل
+    if (totalFilesCount > 0) {
+      html += `
+        <div class="bg-gradient-to-l from-blue-50 to-indigo-50 dark:from-slate-800 dark:to-slate-700 p-4 rounded-2xl shadow-md border border-blue-200 dark:border-slate-600 mb-6 text-center">
+          <h4 class="font-bold text-blue-700 dark:text-blue-300 mb-2">📥 هل تريد الدراسة بدون إنترنت؟</h4>
+          <p class="text-xs text-gray-600 dark:text-gray-400 mb-3">قم بتحميل جميع ملفاتك (${totalFilesCount} ملف) الآن لتتمكن من فتحها في أي وقت بدون اتصال.</p>
+          <button onclick="downloadAllPurchasedFiles()" id="downloadAllBtn" class="w-full bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-xl font-bold text-sm shadow-md transition-colors flex items-center justify-center gap-2">
+            <i class="fas fa-download"></i> تحميل جميع الملفات للدراسة أوفلاين
+          </button>
+          <div id="downloadStatusText" class="text-xs text-blue-600 dark:text-blue-400 mt-2 hidden font-bold"></div>
+        </div>
+      `;
+    }
+
     if (allExtraFileIds.size > 0) {
       const extraFiles = await fetchFilesFromAnyCollection(Array.from(allExtraFileIds));
       
@@ -1180,8 +1268,6 @@ import { initializeFirestore, persistentLocalCache, persistentSingleTabManager, 
       }
     }
 
-    const individualPurchases = purchasedFiles.filter(fid => !allExtraFileIds.has(fid));
-    
     if (individualPurchases.length > 0) {
       const individualFiles = await fetchFilesFromAnyCollection(individualPurchases);
       
@@ -1668,6 +1754,7 @@ import { initializeFirestore, persistentLocalCache, persistentSingleTabManager, 
     } catch(e) { alert("تعذر فتح نافذة الطباعة."); overlay.classList.add('hidden'); overlay.classList.remove('flex'); }
   };
 
+  // ============ شاشتا النماذج والدعم ============
   function loadExtraFilesScreen(category) {
     const containerId = category === 'training' ? 'trainingContainer' : 'supportContainer';
     const container = document.getElementById(containerId);
@@ -1997,7 +2084,7 @@ import { initializeFirestore, persistentLocalCache, persistentSingleTabManager, 
     }
   }
 
-    window.onload = function() {
+  window.onload = function() {
     if (localStorage.getItem('enjaz_theme') === 'dark') { document.documentElement.classList.add('dark'); document.getElementById('themeIcon').className = 'fas fa-sun text-lg'; }
     loadCart();
     loadGuestPurchases();
