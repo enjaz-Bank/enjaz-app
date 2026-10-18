@@ -241,7 +241,25 @@
         if (activeListeners.files) { activeListeners.files(); activeListeners.files = null; } break;
       case 'packagesScreen':
         document.getElementById('packagesScreen').style.display = 'none';
-        document.getElementById('appFrame').style.display = 'block'; break;
+        document.getElementById('appFrame').style.display = 'block';
+        // العودة للشاشة التي كنا فيها (ملفات الدرس أو غيرها)
+        if (appStack.length > 0) {
+          const prev = appStack[appStack.length - 1].name;
+          if (prev === 'lessonFiles') {
+            document.getElementById('lessonFilesScreen').style.display = 'flex';
+            document.getElementById('appFrame').style.display = 'none';
+          } else if (prev === 'trainingScreen') {
+            document.getElementById('trainingScreen').style.display = 'flex';
+            document.getElementById('appFrame').style.display = 'none';
+          } else if (prev === 'supportScreen') {
+            document.getElementById('supportScreen').style.display = 'flex';
+            document.getElementById('appFrame').style.display = 'none';
+          } else if (prev === 'viewer') {
+            document.getElementById('viewerScreen').style.display = 'flex';
+            document.getElementById('appFrame').style.display = 'none';
+          }
+        }
+        break;
       case 'cartScreen':
         document.getElementById('cartScreen').style.display = 'none';
         document.getElementById('appFrame').style.display = 'block'; break;
@@ -251,7 +269,8 @@
         currentView = 'grid'; break;
       case 'singleBuyModal':
         document.getElementById('singleBuyModal').classList.add('hidden');
-        document.getElementById('singleBuyModal').classList.remove('flex'); break;
+        document.getElementById('singleBuyModal').classList.remove('flex');
+        document.getElementById('singleBuyModal').style.display = 'none'; break;
       case 'premiumModal':
         document.getElementById('premiumModal').classList.add('hidden');
         document.getElementById('premiumModal').classList.remove('flex'); break;
@@ -410,39 +429,40 @@
 
   window.openSingleBuyModal = function() { 
     playClickSound();
-    document.getElementById('singleBuyModal').classList.remove('hidden'); 
-    document.getElementById('singleBuyModal').classList.add('flex'); 
+    const m = document.getElementById('singleBuyModal');
+    m.style.display = 'flex'; // إجبار الظهور
+    m.classList.remove('hidden'); 
+    m.classList.add('flex'); 
     pushScreen('singleBuyModal'); 
   }
   window.closeSingleBuyModal = function() { requestBack(); }
 
-     window.goToPackagesFromSingleBuy = function() {
+  window.goToPackagesFromSingleBuy = function() {
     playClickSound();
     
-    // 1. إغلاق نافذة شراء الملف المدفوع
+    // إغلاق نافذة الشراء
     const m = document.getElementById('singleBuyModal');
     m.classList.add('hidden');
     m.classList.remove('flex');
     m.style.display = 'none'; 
     
-    // 2. إغلاق جميع الشاشات التي قد تغطي صفحة الباقات
-    document.getElementById('lessonFilesScreen').style.display = 'none';
-    document.getElementById('trainingScreen').style.display = 'none';
-    document.getElementById('supportScreen').style.display = 'none';
-    document.getElementById('viewerScreen').style.display = 'none';
-    document.getElementById('cartScreen').style.display = 'none';
-    
-    // 3. إزالة النافذة من سجل التنقل
+    // إزالة النافذة من سجل التنقل
     if (appStack.length > 0 && appStack[appStack.length - 1].name === 'singleBuyModal') {
       appStack.pop();
       navLevel = Math.max(0, navLevel - 1);
     }
     
-    // 4. فتح صفحة الباقات
-    document.getElementById('packagesScreen').style.display = 'flex';
-    document.getElementById('appFrame').style.display = 'none';
+    // إخفاء جميع الشاشات لضمان عدم تغطية صفحة الباقات
+    document.getElementById('lessonFilesScreen').style.display = 'none';
+    document.getElementById('trainingScreen').style.display = 'none';
+    document.getElementById('supportScreen').style.display = 'none';
+    document.getElementById('viewerScreen').style.display = 'none';
+    document.getElementById('appFrame').style.display = 'none'; 
     
-    // 5. إضافة صفحة الباقات لسجل التنقل وتحميل محتواها
+    // إظهار صفحة الباقات
+    document.getElementById('packagesScreen').style.display = 'flex';
+    
+    // إضافة صفحة الباقات للسجل
     pushScreen('packagesScreen');
     loadPackages();
   };
@@ -647,7 +667,7 @@
     } catch(err) {
       alert('فشل توليد الكود: ' + err.message);
     } finally {
-      if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-eye"></i> عرض كود الاسترجاع'; }
+      if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-eye"></i> عرض الكود'; }
     }
   };
 
@@ -1159,7 +1179,7 @@
       html += `
       <div class="grid grid-cols-3 gap-2 mb-4">
         <button onclick="openRecoverModal()" class="bg-gradient-to-l from-purple-500 to-indigo-500 text-white py-2.5 rounded-xl font-bold text-xs shadow-md active:scale-95 transition-transform flex flex-col items-center justify-center gap-1">
-          <i class="fas fa-key text-lg"></i> <span>استرجاع الكود</span>
+          <i class="fas fa-key text-lg"></i> <span>استرجاع</span>
         </button>
         <button onclick="showMyRecoveryCode(event)" id="showCodeBtn" class="bg-gradient-to-l from-amber-500 to-orange-500 text-white py-2.5 rounded-xl font-bold text-xs shadow-md active:scale-95 transition-transform flex flex-col items-center justify-center gap-1">
           <i class="fas fa-eye text-lg"></i> <span>عرض الكود</span>
@@ -1191,7 +1211,7 @@
               لتجد ملفاتك دائماً في انتظارك بكل حب، سجّل حسابك وستكون معك أينما ذهبت.
             </p>
             <button onclick="openAuthScreen()" class="bg-gradient-to-l from-pink-500 to-rose-500 hover:from-pink-600 hover:to-rose-600 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-md active:scale-95 transition-transform flex items-center gap-2">
-              <i class="fas fa-user-plus"></i> سجّل بحسابك واستفيد 💛
+              <i class="fas fa-user-plus"></i> سجّل حسابك بحب 💛
             </button>
           </div>
         </div>
@@ -2401,10 +2421,10 @@
     <div class="relative z-20 px-4 -mt-6 mb-3">
       <div class="bg-white/90 dark:bg-slate-800/90 backdrop-blur-md p-3 rounded-2xl shadow-lg border">
         <div class="grid grid-cols-3 gap-2 text-center">
-  <div><p class="text-2xl font-extrabold text-indigo-600 dark:text-indigo-400" id="statLessons">0</p><p class="text-sm font-bold text-gray-700 dark:text-gray-300 mt-1">الدرس</p></div>
-  <div class="border-r border-l border-gray-200 dark:border-slate-600"><p class="text-2xl font-extrabold text-emerald-600 dark:text-emerald-400" id="statSubjects">0</p><p class="text-sm font-bold text-gray-700 dark:text-gray-300 mt-1">المادة</p></div>
-  <div><p class="text-2xl font-extrabold text-amber-600 dark:text-amber-400">75%</p><p class="text-sm font-bold text-gray-700 dark:text-gray-300 mt-1">الإنجاز</p></div>
-</div>
+          <div><p class="text-2xl font-extrabold text-indigo-600 dark:text-indigo-400" id="statLessons">0</p><p class="text-sm font-bold text-gray-700 dark:text-gray-300 mt-1">الدرس</p></div>
+          <div class="border-r border-l border-gray-200 dark:border-slate-600"><p class="text-2xl font-extrabold text-emerald-600 dark:text-emerald-400" id="statSubjects">0</p><p class="text-sm font-bold text-gray-700 dark:text-gray-300 mt-1">المادة</p></div>
+          <div><p class="text-2xl font-extrabold text-amber-600 dark:text-amber-400">75%</p><p class="text-sm font-bold text-gray-700 dark:text-gray-300 mt-1">الإنجاز</p></div>
+        </div>
         <div class="w-full bg-gray-200 dark:bg-slate-700 rounded-full h-1.5 mt-3 overflow-hidden"><div id="progressBar" class="bg-gradient-to-r from-emerald-400 to-emerald-600 h-full rounded-full" style="width: 0%"></div></div>
       </div>
     </div>
