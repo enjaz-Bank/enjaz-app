@@ -1,4 +1,4 @@
-const CACHE_NAME = 'enjaz-v9';
+const CACHE_NAME = 'enjaz-v10';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',    // لاحظ أننا نستخدم index.html بناء على صورتك
