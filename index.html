@@ -215,11 +215,14 @@
         document.getElementById('viewerFrame').srcdoc = '';
         document.getElementById('viewerFrame').src = 'about:blank';
         if (viewerSource === 'trainingScreen') {
-          document.getElementById('trainingScreen').style.display = 'flex';
+          document.getElementById('trainingScreen').style.display = 'block';
         } else if (viewerSource === 'supportScreen') {
-          document.getElementById('supportScreen').style.display = 'flex';
+          document.getElementById('supportScreen').style.display = 'block';
+        } else if (viewerSource === 'library') {
+          document.getElementById('appFrame').style.display = 'block';
+          loadLibrary();
         } else {
-          document.getElementById('lessonFilesScreen').style.display = 'flex';
+          document.getElementById('lessonFilesScreen').style.display = 'block';
           loadLibrary();
         }
         viewerSource = 'lessonFiles';
@@ -245,13 +248,13 @@
         if (appStack.length > 0) {
           const prev = appStack[appStack.length - 1].name;
           if (prev === 'lessonFiles') {
-            document.getElementById('lessonFilesScreen').style.display = 'flex';
+            document.getElementById('lessonFilesScreen').style.display = 'block';
             document.getElementById('appFrame').style.display = 'none';
           } else if (prev === 'trainingScreen') {
-            document.getElementById('trainingScreen').style.display = 'flex';
+            document.getElementById('trainingScreen').style.display = 'block';
             document.getElementById('appFrame').style.display = 'none';
           } else if (prev === 'supportScreen') {
-            document.getElementById('supportScreen').style.display = 'flex';
+            document.getElementById('supportScreen').style.display = 'block';
             document.getElementById('appFrame').style.display = 'none';
           } else if (prev === 'viewer') {
             document.getElementById('viewerScreen').style.display = 'flex';
@@ -950,8 +953,17 @@
         
         const codeToShow = (currentUser && currentUser.isAnonymous) ? currentUserData.recoveryCode : null;
         showSuccessPopup('🎉 تم تفعيل الكود!', 'جميع ملفاتك أصبحت متاحة في مكتبتك', () => {
-          while(navLevel > 0) { const st = appStack.pop(); navLevel--; applyCloseForState(st); }
+          // ✅ إصلاح: تنظيف صامت بدون applyCloseForState
+          appStack = [];
           navLevel = 0;
+          ['lessonFilesScreen','viewerScreen','packagesScreen','cartScreen','trainingScreen','supportScreen'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.style.display = 'none';
+          });
+          const _pm = document.getElementById('premiumModal');
+          if (_pm) { _pm.classList.add('hidden'); _pm.classList.remove('flex'); }
+          const _sbm = document.getElementById('singleBuyModal');
+          if (_sbm) { _sbm.classList.add('hidden'); _sbm.classList.remove('flex'); _sbm.style.display = 'none'; }
           try { history.replaceState({ level: 0 }, ''); } catch(e) {}
           showAppTab('libraryContainer');
           if (codeToShow) {
@@ -1014,8 +1026,17 @@
         }
         
         showSuccessPopup('👑 تم تفعيل الباقة!', 'استمتع بجميع الدروس المتاحة الآن', () => {
-          while(navLevel > 0) { const st = appStack.pop(); navLevel--; applyCloseForState(st); }
+          // ✅ إصلاح: تنظيف صامت بدون applyCloseForState
+          appStack = [];
           navLevel = 0;
+          ['lessonFilesScreen','viewerScreen','packagesScreen','cartScreen','trainingScreen','supportScreen'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.style.display = 'none';
+          });
+          const _pm2 = document.getElementById('premiumModal');
+          if (_pm2) { _pm2.classList.add('hidden'); _pm2.classList.remove('flex'); }
+          const _sbm2 = document.getElementById('singleBuyModal');
+          if (_sbm2) { _sbm2.classList.add('hidden'); _sbm2.classList.remove('flex'); _sbm2.style.display = 'none'; }
           try { history.replaceState({ level: 0 }, ''); } catch(e) {}
           showAppTab('libraryContainer');
         });
@@ -1078,7 +1099,7 @@
     }
   };
 
-  // ✅ دالة تحميل الكل للدراسة أوفلاين
+  // ✅ دالة تحميل الكل للدراسة أوفلاين (مع تخزين فعلي عبر Cache API للملفات الخارجية)
   window.downloadAllPurchasedFiles = async function() {
     if (!currentUser) return;
 
@@ -1098,21 +1119,55 @@
     if (statusText) { statusText.classList.remove('hidden'); statusText.innerText = `جاري تحضير الملفات... (0/${allIds.length})`; }
 
     let downloadedCount = 0;
+    let cachedExternal = 0;
+    let cachedErrors = 0;
     const chunkSize = 30;
     const chunks = [];
     for (let i = 0; i < allIds.length; i += chunkSize) chunks.push(allIds.slice(i, i + chunkSize));
 
+    // محاولة فتح Cache API لتخزين الملفات الخارجية (روابط http/https)
+    let fileCache = null;
+    try {
+      if ('caches' in window) {
+        fileCache = await caches.open('enjaz-files-v1');
+      }
+    } catch(e) { console.warn('Cache API unavailable:', e); }
+
     try {
       for (const chunk of chunks) {
-        const filesQ = query(collection(db, "files"), where(documentId(), "in", chunk));
-        const filesSnap = await getDocs(filesQ);
         let foundIds = new Set();
-        filesSnap.forEach(d => foundIds.add(d.id));
+        let chunkFiles = [];
+        try {
+          const filesQ = query(collection(db, "files"), where(documentId(), "in", chunk));
+          const filesSnap = await getDocs(filesQ);
+          filesSnap.forEach(d => { foundIds.add(d.id); chunkFiles.push({ id: d.id, ...d.data() }); });
+        } catch(e) { console.warn('files chunk fail:', e); }
 
         const remaining = chunk.filter(id => !foundIds.has(id));
         if (remaining.length > 0) {
-          const extraQ = query(collection(db, "extraFiles"), where(documentId(), "in", remaining));
-          await getDocs(extraQ);
+          try {
+            const extraQ = query(collection(db, "extraFiles"), where(documentId(), "in", remaining));
+            const extraSnap = await getDocs(extraQ);
+            extraSnap.forEach(d => chunkFiles.push({ id: d.id, ...d.data() }));
+          } catch(e) { console.warn('extraFiles chunk fail:', e); }
+        }
+
+        if (fileCache) {
+          for (const f of chunkFiles) {
+            const src = f.fileData;
+            if (src && typeof src === 'string' && (src.startsWith('http://') || src.startsWith('https://'))) {
+              try {
+                const existing = await fileCache.match(src);
+                if (!existing) {
+                  await fileCache.add(src);
+                  cachedExternal++;
+                }
+              } catch(e) {
+                cachedErrors++;
+                console.warn('cache external fail:', f.id, e?.message || e);
+              }
+            }
+          }
         }
 
         downloadedCount += chunk.length;
@@ -1120,7 +1175,10 @@
       }
 
       if (statusText) {
-        statusText.innerText = "✅ تم تحميل جميع الملفات بنجاح! يمكنك الآن تصفحها بدون إنترنت.";
+        let msg = `✅ تم تجهيز ${allIds.length} ملف للاستخدام أوفلاين`;
+        if (cachedExternal > 0) msg += ` (${cachedExternal} ملف خارجي مخزّن)`;
+        if (cachedErrors > 0) msg += ` — ${cachedErrors} تعذّر تخزينه`;
+        statusText.innerText = msg;
         statusText.classList.replace('text-blue-600', 'text-emerald-600');
         statusText.classList.replace('dark:text-blue-400', 'dark:text-emerald-400');
       }
@@ -2132,7 +2190,21 @@
         if (last.name === 'lessonFiles' && last.data?.lessonId) {
           openLesson(last.data.lessonId, true);
         } else if (last.name === 'packagesScreen') {
-          openPackagesScreen(true);
+          // ✅ إصلاح: لا نعيد فتح الباقات — نعود للشاشة السابقة أو الرئيسية
+          appStack = stack.slice(0, stack.length - 1);
+          navLevel = appStack.length;
+          const prevLast = appStack[appStack.length - 1];
+          if (prevLast && prevLast.name === 'lessonFiles' && prevLast.data?.lessonId) {
+            openLesson(prevLast.data.lessonId, true);
+          } else if (prevLast && prevLast.name === 'trainingScreen') {
+            openTrainingScreen(true);
+          } else if (prevLast && prevLast.name === 'supportScreen') {
+            openSupportScreen(true);
+          } else if (prevLast && prevLast.name === 'subjectList' && prevLast.data?.subject) {
+            openSubject(prevLast.data.subject, true);
+          } else {
+            showAppTab('lessonsContainer');
+          }
         } else if (last.name === 'cartScreen') {
           openCartScreen(true);
         } else if (last.name === 'subjectList' && last.data?.subject) {
