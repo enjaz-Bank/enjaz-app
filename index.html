@@ -416,29 +416,34 @@
   }
   window.closeSingleBuyModal = function() { requestBack(); }
 
-    window.goToPackagesFromSingleBuy = function() {
+     window.goToPackagesFromSingleBuy = function() {
     playClickSound();
     
-    // 1. إغلاق النافذة المنبثقة
+    // 1. إغلاق نافذة شراء الملف المدفوع
     const m = document.getElementById('singleBuyModal');
     m.classList.add('hidden');
     m.classList.remove('flex');
+    m.style.display = 'none'; 
     
-    // 2. إزالة النافذة من سجل التنقل (Stack)
+    // 2. إغلاق جميع الشاشات التي قد تغطي صفحة الباقات
+    document.getElementById('lessonFilesScreen').style.display = 'none';
+    document.getElementById('trainingScreen').style.display = 'none';
+    document.getElementById('supportScreen').style.display = 'none';
+    document.getElementById('viewerScreen').style.display = 'none';
+    document.getElementById('cartScreen').style.display = 'none';
+    
+    // 3. إزالة النافذة من سجل التنقل
     if (appStack.length > 0 && appStack[appStack.length - 1].name === 'singleBuyModal') {
       appStack.pop();
       navLevel = Math.max(0, navLevel - 1);
-      try { sessionStorage.setItem('enjaz_app_stack', JSON.stringify(appStack)); } catch(e) {}
     }
     
-    // 3. فتح صفحة الباقات بشكل مباشر وقسري
+    // 4. فتح صفحة الباقات
     document.getElementById('packagesScreen').style.display = 'flex';
     document.getElementById('appFrame').style.display = 'none';
     
-    // إضافة صفحة الباقات لسجل التنقل
+    // 5. إضافة صفحة الباقات لسجل التنقل وتحميل محتواها
     pushScreen('packagesScreen');
-    
-    // تحميل محتوى الباقات
     loadPackages();
   };
 
