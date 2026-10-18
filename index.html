@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
 <title>منصة إنجاز الأكاديمية</title>
+<!-- ✅ PWA Setup -->
+<meta name="theme-color" content="#4f46e5">
+<link rel="manifest" href="./manifest.json">
 
 <meta http-equiv="Content-Security-Policy" content="default-src * 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https:; frame-src * 'self' https: data: blob:; img-src * 'self' data: blob: https:; media-src * 'self' data: blob: https:; connect-src * https: wss:;">
 
@@ -605,6 +608,40 @@
     document.getElementById('recoveryCodeModal').classList.remove('flex');
   };
 
+  // ✅ دالة عرض كود الاسترجاع (تُولّد الكود إذا لم يكن موجوداً)
+  window.showMyRecoveryCode = async function(e) {
+    if (!currentUser || !currentUser.isAnonymous) {
+      alert('هذه الميزة للزوار فقط. أنت مسجل بحساب حقيقي.');
+      return;
+    }
+    
+    if (currentUserData?.recoveryCode) {
+      showRecoveryCodePopup(currentUserData.recoveryCode);
+      return;
+    }
+    
+    const btn = e?.target?.closest('button');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> جاري التوليد...'; }
+    
+    try {
+      const newCode = generateRecoveryCode();
+      await updateDoc(doc(db, "users", currentUser.uid), { recoveryCode: newCode });
+      await setDoc(doc(db, "recoveryCodes", newCode), {
+        uid: currentUser.uid,
+        purchasedFiles: currentUserData?.purchasedFiles || [],
+        createdAt: new Date(),
+        usedCount: 0
+      });
+      if(currentUserData) currentUserData.recoveryCode = newCode;
+      clearLibraryCache();
+      showRecoveryCodePopup(newCode);
+    } catch(err) {
+      alert('فشل توليد الكود: ' + err.message);
+    } finally {
+      if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-eye"></i> عرض كود الاسترجاع الخاص بي'; }
+    }
+  };
+
   window.recoverPurchases = async function() {
     const input = document.getElementById('recoverCodeInput');
     const code = input.value.trim().toUpperCase();
@@ -998,7 +1035,7 @@
     }
   };
 
-  // ✅ جديد: دالة تحميل جميع الملفات للدراسة أوفلاين
+  // ✅ دالة تحميل جميع الملفات للدراسة أوفلاين
   window.downloadAllPurchasedFiles = async function() {
     if (!currentUser) return;
 
@@ -1093,15 +1130,15 @@
     if (currentUser && currentUser.isAnonymous) {
       const purchasedFiles = currentUserData?.purchasedFiles || [];
       
+      // 1. زر الاسترجاع
       html += `<button onclick="openRecoverModal()" class="w-full bg-gradient-to-l from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600 text-white py-3 rounded-xl font-bold text-sm shadow-md active:scale-95 transition-transform mb-3 flex items-center justify-center gap-2">
         <i class="fas fa-key"></i> استرجاع مشتريات من جهاز آخر
       </button>`;
 
-      if (currentUserData?.recoveryCode) {
-        html += `<button onclick="window.showRecoveryCodePopup('${currentUserData.recoveryCode}')" class="w-full bg-gradient-to-l from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white py-3 rounded-xl font-bold text-sm shadow-md active:scale-95 transition-transform mb-4 flex items-center justify-center gap-2">
-          <i class="fas fa-eye"></i> عرض كود الاسترجاع الخاص بي
-        </button>`;
-      }
+      // 2. زر عرض الكود (يظهر دائماً)
+      html += `<button onclick="showMyRecoveryCode(event)" class="w-full bg-gradient-to-l from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white py-3 rounded-xl font-bold text-sm shadow-md active:scale-95 transition-transform mb-4 flex items-center justify-center gap-2">
+        <i class="fas fa-eye"></i> عرض كود الاسترجاع الخاص بي
+      </button>`;
       
       if (purchasedFiles.length === 0) {
         html += `<div class="text-center mt-10 text-gray-400">
@@ -1113,12 +1150,14 @@
         return;
       }
 
+      // 3. بطاقة المشتريات المباشرة
       html += `<div class="bg-gradient-to-l from-emerald-50 to-teal-50 dark:from-slate-800 dark:to-slate-700 p-4 rounded-2xl shadow-md border border-emerald-200 dark:border-slate-600 mb-4 text-center">
         <i class="fas fa-shopping-bag text-4xl text-emerald-500 mb-2"></i>
         <h3 class="font-bold text-lg text-emerald-600 dark:text-emerald-400">مشترياتك المباشرة</h3>
         <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">${purchasedFiles.length} ملف محفوظ على جهازك</p>
       </div>`;
 
+      // 4. البانر الوردي
       html += `<div class="bg-gradient-to-br from-rose-50 via-pink-50 to-amber-50 dark:from-slate-800 dark:via-slate-800 dark:to-slate-700 border-2 border-pink-200 dark:border-slate-600 rounded-2xl p-5 mb-5 relative overflow-hidden">
         <div class="absolute top-0 left-0 text-pink-100 dark:text-slate-700 text-7xl opacity-40 -mt-2 -ml-2 pointer-events-none">
           <i class="fas fa-heart"></i>
@@ -1139,7 +1178,7 @@
         </div>
       </div>`;
 
-      // ✅ إضافة زر تحميل الكل للزوار
+      // 5. زر التحميل أوفلاين الجديد
       html += `
         <div class="bg-gradient-to-l from-blue-50 to-indigo-50 dark:from-slate-800 dark:to-slate-700 p-4 rounded-2xl shadow-md border border-blue-200 dark:border-slate-600 mb-4 text-center">
           <h4 class="font-bold text-blue-700 dark:text-blue-300 mb-2">📥 هل تريد الدراسة بدون إنترنت؟</h4>
@@ -1151,6 +1190,7 @@
         </div>
       `;
 
+      // 6. قائمة الملفات
       const guestFiles = await fetchFilesFromAnyCollection(purchasedFiles);
       
       if (guestFiles.length > 0) {
@@ -1239,10 +1279,8 @@
       html += `</div>`;
     }
 
-    const individualPurchases = purchasedFiles.filter(fid => !allExtraFileIds.has(fid));
     const totalFilesCount = purchasedFiles.length + allExtraFileIds.size;
 
-    // ✅ إضافة زر تحميل الكل للمستخدم المسجل
     if (totalFilesCount > 0) {
       html += `
         <div class="bg-gradient-to-l from-blue-50 to-indigo-50 dark:from-slate-800 dark:to-slate-700 p-4 rounded-2xl shadow-md border border-blue-200 dark:border-slate-600 mb-6 text-center">
@@ -1268,6 +1306,8 @@
       }
     }
 
+    const individualPurchases = purchasedFiles.filter(fid => !allExtraFileIds.has(fid));
+    
     if (individualPurchases.length > 0) {
       const individualFiles = await fetchFilesFromAnyCollection(individualPurchases);
       
@@ -1754,7 +1794,6 @@
     } catch(e) { alert("تعذر فتح نافذة الطباعة."); overlay.classList.add('hidden'); overlay.classList.remove('flex'); }
   };
 
-  // ============ شاشتا النماذج والدعم ============
   function loadExtraFilesScreen(category) {
     const containerId = category === 'training' ? 'trainingContainer' : 'supportContainer';
     const container = document.getElementById(containerId);
