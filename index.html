@@ -2,7 +2,7 @@
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes"> 
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
 <title>منصة إنجاز الأكاديمية</title>
 <!-- ✅ PWA Setup -->
 <meta name="theme-color" content="#4f46e5">
@@ -207,7 +207,7 @@
   }
   function requestBack() { if (navLevel > 0) { try { history.back(); } catch (e) {} } }
 
-    function applyCloseForState(state) {
+  function applyCloseForState(state) {
     if (!state) return;
     switch (state.name) {
       case 'viewer': {
@@ -216,15 +216,14 @@
         document.getElementById('viewerFrame').src = 'about:blank';
         
         if (viewerSource === 'trainingScreen') {
-          document.getElementById('trainingScreen').style.display = 'block'; // ✅ تعديل
+          document.getElementById('trainingScreen').style.display = 'block';
         } else if (viewerSource === 'supportScreen') {
-          document.getElementById('supportScreen').style.display = 'block'; // ✅ تعديل
+          document.getElementById('supportScreen').style.display = 'block';
         } else if (viewerSource === 'library') {
-          // ✅ إصلاح العودة للمكتبة
           document.getElementById('appFrame').style.display = 'block';
           window.showAppTab('libraryContainer');
         } else {
-          document.getElementById('lessonFilesScreen').style.display = 'block'; // ✅ تعديل
+          document.getElementById('lessonFilesScreen').style.display = 'block';
           loadLibrary();
         }
         viewerSource = 'lessonFiles';
@@ -250,42 +249,19 @@
         if (appStack.length > 0) {
           const prev = appStack[appStack.length - 1].name;
           if (prev === 'lessonFiles') {
-            document.getElementById('lessonFilesScreen').style.display = 'block'; // ✅ تعديل
+            document.getElementById('lessonFilesScreen').style.display = 'block';
             document.getElementById('appFrame').style.display = 'none';
           } else if (prev === 'trainingScreen') {
-            document.getElementById('trainingScreen').style.display = 'block'; // ✅ تعديل
+            document.getElementById('trainingScreen').style.display = 'block';
             document.getElementById('appFrame').style.display = 'none';
           } else if (prev === 'supportScreen') {
-            document.getElementById('supportScreen').style.display = 'block'; // ✅ تعديل
+            document.getElementById('supportScreen').style.display = 'block';
             document.getElementById('appFrame').style.display = 'none';
           } else if (prev === 'viewer') {
             document.getElementById('viewerScreen').style.display = 'flex'; 
             document.getElementById('appFrame').style.display = 'none';
           }
         }
-        break;
-      case 'cartScreen':
-        document.getElementById('cartScreen').style.display = 'none';
-        document.getElementById('appFrame').style.display = 'block'; break;
-      case 'subjectList':
-        document.getElementById('listView').style.display = 'none';
-        document.getElementById('gridView').style.display = 'block';
-        currentView = 'grid'; break;
-      case 'singleBuyModal':
-        document.getElementById('singleBuyModal').classList.add('hidden');
-        document.getElementById('singleBuyModal').classList.remove('flex');
-        document.getElementById('singleBuyModal').style.display = 'none'; break;
-      case 'premiumModal':
-        document.getElementById('premiumModal').classList.add('hidden');
-        document.getElementById('premiumModal').classList.remove('flex'); break;
-      case 'socialMenu':
-        document.getElementById('socialMenu').classList.add('hidden');
-        document.getElementById('contactSubMenu').classList.add('hidden'); break;
-      case 'authScreen':
-        document.getElementById('authScreen').classList.add('hidden');
-        document.getElementById('authScreen').classList.remove('flex'); break;
-    }
-  }
         break;
       case 'cartScreen':
         document.getElementById('cartScreen').style.display = 'none';
