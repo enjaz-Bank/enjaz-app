@@ -36,6 +36,11 @@
   let savedExtraFiles = { pkg1: [], pkg2: [], pkg3: [] };
   let currentEditingExtraFile = null; 
 
+  // ✅ متغيرات جديدة لتحديد العناصر للحذف الجماعي
+  let selectedStudents = new Set();
+  let selectedCodes = new Set();
+  let selectedRecoveryCodes = new Set();
+
   function normalizeSubject(s) {
     return (s || '').toString().trim().replace(/\s+/g, ' ')
       .replace(/[إأآا]/g, 'ا').replace(/ى/g, 'ي').replace(/ة/g, 'ه');
@@ -152,6 +157,83 @@
     
     if (tabName === 'maintenance') loadMaintenanceStats();
   };
+
+  // ============ 🗑️ دوال التحديد والحذف الجماعي الجديدة ============
+  window.toggleSelection = function(type, id, isChecked) {
+    let set;
+    if (type === 'students') set = selectedStudents;
+    else if (type === 'codes') set = selectedCodes;
+    else if (type === 'recovery') set = selectedRecoveryCodes;
+    
+    if (isChecked) set.add(id);
+    else set.delete(id);
+    
+    updateBulkDeleteButton(type);
+  };
+
+  window.toggleSelectAll = function(type, isChecked) {
+    let set;
+    let checkboxes;
+    if (type === 'students') { set = selectedStudents; checkboxes = document.querySelectorAll('.student-checkbox'); }
+    else if (type === 'codes') { set = selectedCodes; checkboxes = document.querySelectorAll('.code-checkbox'); }
+    else if (type === 'recovery') { set = selectedRecoveryCodes; checkboxes = document.querySelectorAll('.recovery-checkbox'); }
+    
+    set.clear(); // تصفير التحديد السابق
+    checkboxes.forEach(cb => {
+      cb.checked = isChecked;
+      if (isChecked) set.add(cb.value);
+    });
+    
+    updateBulkDeleteButton(type);
+  };
+
+  window.updateBulkDeleteButton = function(type) {
+    let set;
+    let btn;
+    if (type === 'students') { set = selectedStudents; btn = document.getElementById('bulkDeleteStudentsBtn'); }
+    else if (type === 'codes') { set = selectedCodes; btn = document.getElementById('bulkDeleteCodesBtn'); }
+    else if (type === 'recovery') { set = selectedRecoveryCodes; btn = document.getElementById('bulkDeleteRecoveryBtn'); }
+    
+    if (!btn) return;
+    if (set.size > 0) {
+      btn.classList.remove('hidden');
+      btn.innerText = `🗑️ حذف المحدد (${set.size})`;
+    } else {
+      btn.classList.add('hidden');
+    }
+  };
+
+  window.bulkDelete = async function(type) {
+    let set, collectionName, btn;
+    if (type === 'students') { set = selectedStudents; collectionName = 'users'; btn = document.getElementById('bulkDeleteStudentsBtn'); }
+    else if (type === 'codes') { set = selectedCodes; collectionName = 'codes'; btn = document.getElementById('bulkDeleteCodesBtn'); }
+    else if (type === 'recovery') { set = selectedRecoveryCodes; collectionName = 'recoveryCodes'; btn = document.getElementById('bulkDeleteRecoveryBtn'); }
+    
+    if (set.size === 0) return;
+    if (!confirm(`⚠️ هل أنت متأكد من حذف ${set.size} عنصر نهائياً؟\nلا يمكن التراجع عن هذه العملية.`)) return;
+    
+    if (btn) { btn.disabled = true; btn.innerText = "جاري الحذف..."; }
+    
+    try {
+      const batch = writeBatch(db);
+      set.forEach(id => {
+        batch.delete(doc(db, collectionName, id));
+      });
+      await batch.commit();
+      
+      alert(`✅ تم حذف ${set.size} عنصر بنجاح.`);
+      set.clear(); // مسح التحديد بعد الحذف
+      if (type === 'students') document.getElementById('selectAllStudents').checked = false;
+      if (type === 'codes') document.getElementById('selectAllCodes').checked = false;
+      if (type === 'recovery') document.getElementById('selectAllRecovery').checked = false;
+      
+    } catch(e) {
+      alert("خطأ أثناء الحذف الجماعي: " + e.message);
+    } finally {
+      if (btn) { btn.disabled = false; updateBulkDeleteButton(type); }
+    }
+  };
+  // =================================================================
 
   // ============ 🆕 الملفات الإضافية ============
   window.addExtraFile = async function(category) {
@@ -342,6 +424,12 @@
       if (!c) return;
       c.innerHTML = "";
       
+      // تصفير التحديد عند التحديث
+      selectedRecoveryCodes.clear();
+      updateBulkDeleteButton('recovery');
+      const selectAllCb = document.getElementById('selectAllRecovery');
+      if (selectAllCb) selectAllCb.checked = false;
+
       if (snap.empty) {
         c.innerHTML = "<p class='text-gray-500 text-center py-4'>لا توجد أكواد استرجاع بعد.</p>";
         return;
@@ -369,8 +457,9 @@
           : 'غير معروف';
         
         c.innerHTML += `
-          <div class="bg-white p-4 rounded-lg shadow border mb-3">
-            <div class="flex justify-between items-start gap-2 flex-wrap">
+          <div class="bg-white p-4 rounded-lg shadow border mb-3 flex items-start gap-3">
+            <input type="checkbox" class="recovery-checkbox w-5 h-5 mt-2 cursor-pointer" value="${code.id}" onchange="toggleSelection('recovery', '${code.id}', this.checked)">
+            <div class="flex-1 min-w-0 flex justify-between items-start gap-2 flex-wrap">
               <div class="flex-1 min-w-0">
                 <div class="flex items-center gap-2 flex-wrap mb-2">
                   <code class="bg-gradient-to-l from-purple-100 to-indigo-100 text-indigo-800 font-bold text-base px-3 py-1 rounded-lg tracking-wider">${code.id}</code>
@@ -519,6 +608,13 @@
     onSnapshot(collection(db, "users"), async (snap) => {
       const c = document.getElementById('studentsList');
       c.innerHTML = "";
+      
+      // تصفير التحديد عند التحديث
+      selectedStudents.clear();
+      updateBulkDeleteButton('students');
+      const selectAllCb = document.getElementById('selectAllStudents');
+      if (selectAllCb) selectAllCb.checked = false;
+
       if(snap.empty) { c.innerHTML = "<p class='text-gray-500'>لا يوجد طلاب مسجلون بعد.</p>"; return; }
       
       let packagesSettings = {};
@@ -565,16 +661,19 @@
           actionBtnsHtml += `<button onclick="revokeStudentPackage('${d.id}', '${p.id}', '${name.replace(/'/g, "\\'")}')" class="text-[10px] bg-red-100 text-red-700 hover:bg-red-200 px-2 py-1 rounded font-bold mr-1 mb-1">سحب ${name}</button>`;
         });
         const emailSafe = (u.email || '').replace(/'/g, "\\'");
-        actionBtnsHtml += `<button onclick="deleteStudentAccount('${d.id}', '${emailSafe}')" class="text-[10px] bg-red-600 text-white hover:bg-red-700 px-3 py-1 rounded font-bold mr-1 mb-1">🗑️ حذف الحساب</button>`;
+        actionBtnsHtml += `<button onclick="deleteStudentAccount('${d.id}', '${emailSafe}')" class="text-[10px] bg-red-600 text-white hover:bg-red-700 px-3 py-1 rounded font-bold mr-1 mb-1">🗑️ حذف</button>`;
         
-        c.innerHTML += `<div class="bg-white p-4 rounded-lg shadow mb-3">
-          <div class="flex justify-between items-start flex-wrap gap-2">
-            <div class="flex-1 min-w-0">
-              <h4 class="font-bold text-gray-800 truncate">${u.email || u.name || 'طالب بدون اسم'}</h4>
-              <p class="text-xs text-gray-400 mt-1">ID: ${d.id.substring(0,10)}...</p>
-              <div class="mt-2 flex flex-wrap">${badgesHtml}</div>
+        c.innerHTML += `<div class="bg-white p-4 rounded-lg shadow mb-3 flex items-start gap-3">
+          <input type="checkbox" class="student-checkbox w-5 h-5 mt-1 cursor-pointer" value="${d.id}" onchange="toggleSelection('students', '${d.id}', this.checked)">
+          <div class="flex-1 min-w-0">
+            <div class="flex justify-between items-start flex-wrap gap-2">
+              <div class="flex-1 min-w-0">
+                <h4 class="font-bold text-gray-800 truncate">${u.email || u.name || 'طالب بدون اسم'}</h4>
+                <p class="text-xs text-gray-400 mt-1">ID: ${d.id.substring(0,10)}...</p>
+                <div class="mt-2 flex flex-wrap">${badgesHtml}</div>
+              </div>
+              ${actionBtnsHtml ? `<div class="flex flex-wrap items-start">${actionBtnsHtml}</div>` : ''}
             </div>
-            ${actionBtnsHtml ? `<div class="flex flex-wrap items-start">${actionBtnsHtml}</div>` : ''}
           </div>
         </div>`;
       });
@@ -722,6 +821,13 @@
     onSnapshot(collection(db, "codes"), async (snap) => {
       const c = document.getElementById('codesList');
       c.innerHTML = "";
+      
+      // تصفير التحديد عند التحديث
+      selectedCodes.clear();
+      updateBulkDeleteButton('codes');
+      const selectAllCb = document.getElementById('selectAllCodes');
+      if (selectAllCb) selectAllCb.checked = false;
+
       if(snap.empty) { c.innerHTML = "<p class='text-gray-500'>لا توجد أكواد مولدة.</p>"; return; }
       
       let packagesSettings = {};
@@ -775,7 +881,8 @@
           : (cd.isUsed ? '' : `<button onclick="toggleCodeDisabled('${cd.id}', true)" class="bg-yellow-100 text-yellow-700 hover:bg-yellow-200 px-2 py-1 rounded text-xs" title="تعطيل">⏸️</button>`);
         const deleteBtn = `<button onclick="deleteItem('codes','${cd.id}')" class="bg-red-600 text-white px-2 py-1 rounded text-xs">🗑️</button>`;
         
-        c.innerHTML += `<div class="bg-white p-3 rounded-lg shadow mb-2 flex justify-between items-start gap-2 ${isDisabled ? 'opacity-60' : ''}">
+        c.innerHTML += `<div class="bg-white p-3 rounded-lg shadow mb-2 flex items-start gap-3 ${isDisabled ? 'opacity-60' : ''}">
+          <input type="checkbox" class="code-checkbox w-5 h-5 mt-2 cursor-pointer" value="${cd.id}" onchange="toggleSelection('codes', '${cd.id}', this.checked)">
           <div class="flex-1 min-w-0">
             <div class="flex items-center gap-2 flex-wrap">
               <code class="bg-gray-100 text-indigo-800 font-bold text-lg px-3 py-1 rounded-lg tracking-wider">${displayCode}</code>
@@ -1823,6 +1930,16 @@
       <div class="bg-white p-6 rounded-xl shadow-md border mb-8">
         <h2 class="text-xl font-bold text-indigo-900 mb-2">🔑 أكواد الاسترجاع</h2>
         <p class="text-xs text-gray-500 mb-4">أكواد يستخدمها الزوار لاسترجاع مشترياتهم من أي جهاز آخر. حذف الكود يمنع صاحبه من الاسترجاع.</p>
+        
+        <!-- ✅ شريط تحديد الكل والحذف الجماعي للاسترجاع -->
+        <div class="flex justify-between items-center mb-4 bg-gray-50 p-3 rounded-lg border">
+          <label class="flex items-center gap-2 cursor-pointer font-bold text-sm">
+            <input type="checkbox" id="selectAllRecovery" onchange="toggleSelectAll('recovery', this.checked)" class="w-4 h-4">
+            تحديد الكل
+          </label>
+          <button id="bulkDeleteRecoveryBtn" onclick="bulkDelete('recovery')" class="hidden bg-red-600 text-white px-4 py-1.5 rounded text-sm font-bold shadow hover:bg-red-700 transition-colors">حذف المحدد</button>
+        </div>
+
         <div id="recoveryCodesList"></div>
       </div>
     </div>
@@ -1962,6 +2079,16 @@
     <div id="students" class="tab-content hidden">
       <div class="bg-white p-6 rounded-xl shadow-md border mb-8">
         <h2 class="text-xl font-bold text-indigo-900 mb-4">👥 الطلاب المسجلون</h2>
+        
+        <!-- ✅ شريط تحديد الكل والحذف الجماعي للطلاب -->
+        <div class="flex justify-between items-center mb-4 bg-gray-50 p-3 rounded-lg border">
+          <label class="flex items-center gap-2 cursor-pointer font-bold text-sm">
+            <input type="checkbox" id="selectAllStudents" onchange="toggleSelectAll('students', this.checked)" class="w-4 h-4">
+            تحديد الكل
+          </label>
+          <button id="bulkDeleteStudentsBtn" onclick="bulkDelete('students')" class="hidden bg-red-600 text-white px-4 py-1.5 rounded text-sm font-bold shadow hover:bg-red-700 transition-colors">حذف المحدد</button>
+        </div>
+
         <div id="studentsList"></div>
       </div>
     </div>
@@ -1983,7 +2110,18 @@
             <button onclick="generateCode(10, this)" class="flex-1 bg-blue-600 text-white p-3 rounded-lg font-bold">+ توليد 10 أكواد</button>
           </div>
         </div>
+        
         <h3 class="font-bold mb-2">الأكواد المولدة:</h3>
+        
+        <!-- ✅ شريط تحديد الكل والحذف الجماعي للأكواد -->
+        <div class="flex justify-between items-center mb-4 bg-gray-50 p-3 rounded-lg border">
+          <label class="flex items-center gap-2 cursor-pointer font-bold text-sm">
+            <input type="checkbox" id="selectAllCodes" onchange="toggleSelectAll('codes', this.checked)" class="w-4 h-4">
+            تحديد الكل
+          </label>
+          <button id="bulkDeleteCodesBtn" onclick="bulkDelete('codes')" class="hidden bg-red-600 text-white px-4 py-1.5 rounded text-sm font-bold shadow hover:bg-red-700 transition-colors">حذف المحدد</button>
+        </div>
+
         <div id="codesList"></div>
       </div>
     </div>
