@@ -1,1 +1,8 @@
-
+[{
+  "relation": ["delegate_permission/common.handle_all_urls"],
+  "target": {
+    "namespace": "android_app",
+    "package_name": "io.github.enjaz_bank.twa",
+    "sha256_cert_fingerprints": ["1E:73:45:DB:08:43:7A:1E:63:B5:E6:4B:82:54:87:9A:7D:41:37:49:3B:5E:7C:C6:B1:11:BF:F3:2B:06:C2:08"]
+  }
+}]
