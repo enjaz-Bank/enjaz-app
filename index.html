@@ -207,6 +207,20 @@
   }
   function requestBack() { if (navLevel > 0) { try { history.back(); } catch (e) {} } }
 
+  // ✅ دوال إغلاق التطبيق
+  window.closeExitModal = function() {
+    document.getElementById('exitConfirmModal').classList.add('hidden');
+    document.getElementById('exitConfirmModal').classList.remove('flex');
+    history.pushState({ level: 0, tab: 'lessonsContainer' }, '');
+  };
+
+  window.confirmExitApp = function() {
+    document.getElementById('exitConfirmModal').classList.add('hidden');
+    document.getElementById('exitConfirmModal').classList.remove('flex');
+    window.close();
+    setTimeout(() => { window.history.go(-5); }, 100);
+  };
+
   function applyCloseForState(state) {
     if (!state) return;
     switch (state.name) {
@@ -221,7 +235,7 @@
           document.getElementById('supportScreen').style.display = 'block';
         } else if (viewerSource === 'library') {
           document.getElementById('appFrame').style.display = 'block';
-          window.showAppTab('libraryContainer');
+          window.showAppTab('libraryContainer', true); // ✅ تعديل: إضافة true
         } else {
           document.getElementById('lessonFilesScreen').style.display = 'block';
           loadLibrary();
@@ -286,14 +300,40 @@
     }
   }
 
+  // ✅ تعديل مستمع زر الرجوع
   window.addEventListener('popstate', function (e) {
     if (e.state && e.state.enjazIgnore) return;
+    
     const target = (e.state && typeof e.state.level === 'number') ? e.state.level : 0;
-    while (navLevel > target) { 
-      const st = appStack.pop(); 
-      navLevel--; 
-      applyCloseForState(st); 
+    
+    // 1. إغلاق الشاشات المفتوحة (العارض، النوافذ المنبثقة)
+    if (navLevel > target) { 
+      while (navLevel > target) { 
+        const st = appStack.pop(); 
+        navLevel--; 
+        applyCloseForState(st); 
+      }
       try { sessionStorage.setItem('enjaz_app_stack', JSON.stringify(appStack)); } catch(e) {}
+      return; 
+    }
+
+    // 2. إدارة التبويبات وزر الرجوع
+    if (navLevel === 0) {
+      const activeTab = document.querySelector('.app-tab:not(.hidden)')?.id || 'lessonsContainer';
+      
+      if (activeTab !== 'lessonsContainer') {
+        // إذا كان في تبويب آخر (مثل مكتبتي)، ارجع للرئيسية
+        window.showAppTab('lessonsContainer', true);
+        history.pushState({ level: 0, tab: 'lessonsContainer' }, ''); 
+      } else {
+        // إذا كان في الرئيسية، أظهر نافذة تأكيد الخروج
+        history.pushState({ level: 0, tab: 'lessonsContainer' }, ''); 
+        const exitModal = document.getElementById('exitConfirmModal');
+        if (exitModal) {
+          exitModal.classList.remove('hidden');
+          exitModal.classList.add('flex');
+        }
+      }
     }
   });
 
@@ -360,7 +400,10 @@
     document.getElementById('contactSubMenu').classList.toggle('hidden');
   };
 
-  window.showAppTab = function(tabName) {
+  // ✅ تعديل دالة التبويبات
+  window.showAppTab = function(tabName, skipHistory = false) {
+    const currentActiveTab = document.querySelector('.app-tab:not(.hidden)')?.id;
+    
     document.querySelectorAll('.app-tab').forEach(t => t.classList.add('hidden'));
     document.getElementById(tabName).classList.remove('hidden');
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('nav-active'));
@@ -376,6 +419,10 @@
     if (tabName === 'savedContainer') renderBookmarks();
     if (tabName === 'libraryContainer') loadLibrary();
     try { sessionStorage.setItem('enjaz_active_tab', tabName); } catch(e) {}
+
+    if (!skipHistory && currentActiveTab !== tabName) {
+      history.pushState({ level: 0, tab: tabName }, '');
+    }
   };
 
   window.toggleTheme = function() {
@@ -383,7 +430,6 @@
     const isDark = html.classList.toggle('dark');
     localStorage.setItem('enjaz_theme', isDark ? 'dark' : 'light');
     
-    // تحديث جميع أيقونات القمر/الشمس في الصفحات
     document.querySelectorAll('.theme-icon').forEach(icon => {
       icon.className = isDark ? 'fas fa-sun text-lg' : 'fas fa-moon text-lg';
     });
@@ -579,7 +625,7 @@
         navLevel = 0;
         try { history.replaceState({ level: 0 }, ''); } catch(e) {}
         
-        window.showAppTab('lessonsContainer');
+        window.showAppTab('lessonsContainer', true); // ✅ تعديل: إضافة true
         
         btn.disabled = false;
         btn.innerText = isLogin ? "تسجيل الدخول" : "إنشاء حساب جديد";
@@ -723,7 +769,7 @@
         document.getElementById('recoverModal').classList.remove('flex');
         successBox.classList.add('hidden');
         loadLibrary();
-        showAppTab('libraryContainer');
+        window.showAppTab('libraryContainer', true); // ✅ تعديل: إضافة true
       }, 2000);
       
     } catch(e) {
@@ -809,7 +855,6 @@
       </div>`;
     });
     
-    // ✅ توليد نص الواتساب المنسق
     const userName = currentUserData?.name || "زائر غير مسجل";
     const userEmail = currentUserData?.email || "لا يوجد بريد";
     const now = new Date();
@@ -957,7 +1002,7 @@
           while(navLevel > 0) { const st = appStack.pop(); navLevel--; applyCloseForState(st); }
           navLevel = 0;
           try { history.replaceState({ level: 0 }, ''); } catch(e) {}
-          showAppTab('libraryContainer');
+          window.showAppTab('libraryContainer', true); // ✅ تعديل: إضافة true
           if (codeToShow) {
             setTimeout(() => window.showRecoveryCodePopup(codeToShow), 500);
           }
@@ -1021,7 +1066,7 @@
           while(navLevel > 0) { const st = appStack.pop(); navLevel--; applyCloseForState(st); }
           navLevel = 0;
           try { history.replaceState({ level: 0 }, ''); } catch(e) {}
-          showAppTab('libraryContainer');
+          window.showAppTab('libraryContainer', true); // ✅ تعديل: إضافة true
         });
         return;
       }
@@ -1082,7 +1127,6 @@
     }
   };
 
-  // ✅ دالة تحميل الكل للدراسة أوفلاين
   window.downloadAllPurchasedFiles = async function() {
     if (!currentUser) return;
 
@@ -1169,7 +1213,6 @@
     if (currentUser && currentUser.isAnonymous) {
       const purchasedFiles = currentUserData?.purchasedFiles || [];
       
-      // إخفاء الأزرار إذا لم توجد مشتريات
       if (purchasedFiles.length === 0) {
         html += `<div class="text-center mt-20 text-gray-400">
           <i class="fas fa-book-bookmark text-5xl mb-4 block"></i>
@@ -1180,7 +1223,6 @@
         return;
       }
 
-      // شريط الأزرار الأفقي للزوار
       html += `
       <div class="grid grid-cols-3 gap-2 mb-4">
         <button onclick="openRecoverModal()" class="bg-gradient-to-l from-purple-500 to-indigo-500 text-white py-2.5 rounded-xl font-bold text-xs shadow-md active:scale-95 transition-transform flex flex-col items-center justify-center gap-1">
@@ -1242,7 +1284,6 @@
       return;
     }
 
-    // ======= قسم المستخدم المسجل =======
     const ownedPackages = Array.isArray(currentUserData?.ownedPackages) ? currentUserData.ownedPackages : [];
     const legacyActivePackages = currentUserData?.activePackages || [];
     const purchasedFiles = currentUserData?.purchasedFiles || [];
@@ -1263,7 +1304,6 @@
 
     const totalFilesCount = purchasedFiles.length + allExtraFileIds.size;
 
-    // تصميم مخصص للمستخدم المسجل
     html += `<div class="bg-gradient-to-r from-blue-600 to-indigo-600 rounded-2xl p-5 mb-5 text-white shadow-lg relative overflow-hidden">
       <div class="absolute top-0 left-0 w-32 h-32 bg-white/10 rounded-full -mt-10 -ml-10 pointer-events-none"></div>
       <div class="relative z-10 flex flex-col items-center text-center">
@@ -1279,7 +1319,6 @@
     </div>`;
 
     if (totalFilesCount > 0) {
-      // شريط الأزرار الأفقي للمسجل
       html += `
       <div class="grid grid-cols-1 gap-2 mb-4">
         <button onclick="downloadAllPurchasedFiles()" id="downloadAllBtn" class="w-full bg-blue-600 text-white py-3 rounded-xl font-bold text-sm shadow-md active:scale-95 transition-transform flex items-center justify-center gap-2">
@@ -2189,6 +2228,14 @@
         .then(reg => console.log('✅ PWA Service Worker registered', reg.scope))
         .catch(err => console.warn('⚠️ PWA Service Worker failed', err));
     }
+
+    // ✅ إعداد سجل التصفح الأولي لاصطياد زر الرجوع
+    try {
+      if (!history.state || typeof history.state.level === 'undefined') {
+        history.replaceState({ level: 0, tab: 'lessonsContainer' }, '');
+        history.pushState({ level: 0, tab: 'lessonsContainer' }, '');
+      }
+    } catch(e) {}
   };
 </script>
 <style>
@@ -2500,8 +2547,6 @@
     </div>
   </div>
 
-  <!-- ==================== الصفحات الأخرى ==================== -->
-
   <div id="packagesScreen" class="fixed inset-0 mx-auto max-w-2xl bg-slate-50 dark:bg-slate-900 z-[50] w-full overflow-y-auto pb-24" style="display:none;">
     <div class="relative bg-gradient-to-br from-amber-500 to-orange-600 dark:from-slate-900 dark:to-slate-800 pt-16 pb-12 px-5 rounded-b-[2rem] shadow-xl overflow-hidden w-full">
       <button onclick="closePackagesScreen()" class="absolute top-4 right-4 bg-white/20 p-2 rounded-full z-10" aria-label="رجوع"><i class="fas fa-arrow-right text-lg text-white"></i></button>
@@ -2628,6 +2673,21 @@
       <button id="nav-examsContainer" onclick="showAppTab('examsContainer')" class="nav-btn flex flex-col items-center justify-center w-full h-full" aria-label="مهم جدا"><i class="fas fa-star text-xl"></i><span class="mt-1 text-xs">مهم جدا</span></button>
     </div>
   </nav>
+
+  <!-- ✅ نافذة تأكيد الخروج من التطبيق -->
+  <div id="exitConfirmModal" class="fixed inset-0 z-[200] bg-black/60 hidden justify-center items-center p-4 backdrop-blur-sm">
+    <div class="bg-white dark:bg-slate-800 rounded-3xl p-6 max-w-xs w-full text-center shadow-2xl">
+      <div class="w-16 h-16 mx-auto bg-red-100 dark:bg-red-900/40 rounded-full flex items-center justify-center mb-4">
+        <i class="fas fa-sign-out-alt text-3xl text-red-500"></i>
+      </div>
+      <h3 class="text-xl font-bold text-gray-800 dark:text-white mb-2">تأكيد الخروج</h3>
+      <p class="text-gray-500 dark:text-gray-400 mb-6 text-sm">هل أنت متأكد أنك تريد الخروج من التطبيق؟</p>
+      <div class="flex gap-2">
+        <button onclick="closeExitModal()" class="flex-1 bg-gray-200 dark:bg-slate-700 text-gray-800 dark:text-white p-3 rounded-xl font-bold">إلغاء</button>
+        <button onclick="confirmExitApp()" class="flex-1 bg-red-500 text-white p-3 rounded-xl font-bold">خروج</button>
+      </div>
+    </div>
+  </div>
 
 </body>
 </html>
