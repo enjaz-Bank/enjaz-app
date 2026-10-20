@@ -1,13 +1,19 @@
-const CACHE_NAME = 'enjaz-v18';
+// ⚠️ هام جداً: قم بتغيير الرقم مع كل تحديث تقوم به (v18 -> v19 -> v20 ...)
+const CACHE_NAME = 'enjaz-v19'; 
+
 const ASSETS_TO_CACHE = [
   './',
-  './index.html',    // لاحظ أننا نستخدم index.html بناء على صورتك
+  './index.html',
   './manifest.json'
-  // أزلنا الروابط الخارجية لحل مشكلة CORS
 ];
 
+// ==========================================
+// حدث التثبيت (Install)
+// ==========================================
 self.addEventListener('install', (event) => {
+  // إجبار الـ Service Worker الجديد على التفعيل فوراً دون انتظار
   self.skipWaiting();
+  
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
       return cache.addAll(ASSETS_TO_CACHE);
@@ -15,12 +21,20 @@ self.addEventListener('install', (event) => {
   );
 });
 
+// ==========================================
+// حدث التفعيل (Activate) - مسح الكاش القديم
+// ==========================================
 self.addEventListener('activate', (event) => {
+  // ✅ هذا السطر هو "المفتاح السحري": يجبر التطبيق على استخدام النسخة الجديدة فوراً
+  self.clients.claim();
+
   event.waitUntil(
     caches.keys().then((cacheNames) => {
       return Promise.all(
         cacheNames.map((cache) => {
+          // مسح أي كاش لا يطابق الإصدار الجديد
           if (cache !== CACHE_NAME) {
+            console.log('🗑️ مسح الكاش القديم:', cache);
             return caches.delete(cache);
           }
         })
@@ -29,6 +43,9 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+// ==========================================
+// حدث جلب البيانات (Fetch) - استراتيجية Network First
+// ==========================================
 self.addEventListener('fetch', (event) => {
   // تجاهل طلبات Firebase API
   if (event.request.url.includes('firestore.googleapis.com') || 
@@ -37,25 +54,25 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // لا نحاول تخزين روابط خارجية (مثل Tailwind أو FontAwesome) لتجنب أخطاء CORS
+  // تجاهل الروابط الخارجية (Tailwind, FontAwesome) لتجنب CORS
   if (!event.request.url.startsWith(self.location.origin)) {
-    return; // اتركها للشبكة
+    return; 
   }
 
+  // استراتيجية: الشبكة أولاً (Network First) لضمان أحدث الملفات
   event.respondWith(
-    caches.match(event.request).then((response) => {
-      if (response) return response;
-      
-      return fetch(event.request).then((networkResponse) => {
-        if (!networkResponse || networkResponse.status !== 200 || event.request.method !== 'GET') {
-          return networkResponse;
-        }
+    fetch(event.request).then((networkResponse) => {
+      // إذا نجح الاتصال بالإنترنت، قم بتحديث الكاش بهذه النسخة الجديدة وأعدها للمستخدم
+      if (networkResponse && networkResponse.status === 200 && event.request.method === 'GET') {
         const responseToCache = networkResponse.clone();
         caches.open(CACHE_NAME).then((cache) => {
           cache.put(event.request, responseToCache);
         });
-        return networkResponse;
-      });
+      }
+      return networkResponse;
+    }).catch(() => {
+      // في حال انقطاع الإنترنت، ابحث في الكاش
+      return caches.match(event.request);
     })
   );
 });
