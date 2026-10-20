@@ -207,18 +207,23 @@
   }
   function requestBack() { if (navLevel > 0) { try { history.back(); } catch (e) {} } }
 
-  // ✅ دوال إغلاق التطبيق
+  // ✅ دوال الخروج الجديدة
   window.closeExitModal = function() {
     document.getElementById('exitConfirmModal').classList.add('hidden');
     document.getElementById('exitConfirmModal').classList.remove('flex');
-    history.pushState({ level: 0, tab: 'lessonsContainer' }, '');
+    // إعادة تفعيل فخ زر الرجوع
+    history.pushState({ enjazTrap: true }, '', window.location.href);
   };
 
   window.confirmExitApp = function() {
     document.getElementById('exitConfirmModal').classList.add('hidden');
     document.getElementById('exitConfirmModal').classList.remove('flex');
-    window.close();
-    setTimeout(() => { window.history.go(-5); }, 100);
+    // الخروج الآمن من تطبيقات TWA
+    if (history.state && history.state.enjazTrap) {
+      history.back(); 
+    } else {
+      window.location.href = "about:blank";
+    }
   };
 
   function applyCloseForState(state) {
@@ -230,14 +235,14 @@
         document.getElementById('viewerFrame').src = 'about:blank';
         
         if (viewerSource === 'trainingScreen') {
-          document.getElementById('trainingScreen').style.display = 'block';
+          document.getElementById('trainingScreen').style.display = 'block'; // ✅ إصلاح التشوه
         } else if (viewerSource === 'supportScreen') {
-          document.getElementById('supportScreen').style.display = 'block';
+          document.getElementById('supportScreen').style.display = 'block'; // ✅ إصلاح التشوه
         } else if (viewerSource === 'library') {
           document.getElementById('appFrame').style.display = 'block';
-          window.showAppTab('libraryContainer', true); // ✅ تعديل: إضافة true
+          window.showAppTab('libraryContainer');
         } else {
-          document.getElementById('lessonFilesScreen').style.display = 'block';
+          document.getElementById('lessonFilesScreen').style.display = 'block'; // ✅ إصلاح التشوه
           loadLibrary();
         }
         viewerSource = 'lessonFiles';
@@ -300,40 +305,33 @@
     }
   }
 
-  // ✅ تعديل مستمع زر الرجوع
+  // ✅ نظام اعتراض زر الرجوع (History Trap)
   window.addEventListener('popstate', function (e) {
-    if (e.state && e.state.enjazIgnore) return;
-    
-    const target = (e.state && typeof e.state.level === 'number') ? e.state.level : 0;
-    
-    // 1. إغلاق الشاشات المفتوحة (العارض، النوافذ المنبثقة)
-    if (navLevel > target) { 
-      while (navLevel > target) { 
-        const st = appStack.pop(); 
-        navLevel--; 
-        applyCloseForState(st); 
-      }
+    // 1. إذا كان هناك شاشة مفتوحة، أغلقها
+    if (navLevel > 0) { 
+      const st = appStack.pop(); 
+      navLevel--; 
+      applyCloseForState(st); 
       try { sessionStorage.setItem('enjaz_app_stack', JSON.stringify(appStack)); } catch(e) {}
+      history.pushState({ enjazTrap: true }, '', window.location.href); // نصب الفخ مجدداً
       return; 
     }
 
-    // 2. إدارة التبويبات وزر الرجوع
-    if (navLevel === 0) {
-      const activeTab = document.querySelector('.app-tab:not(.hidden)')?.id || 'lessonsContainer';
-      
-      if (activeTab !== 'lessonsContainer') {
-        // إذا كان في تبويب آخر (مثل مكتبتي)، ارجع للرئيسية
-        window.showAppTab('lessonsContainer', true);
-        history.pushState({ level: 0, tab: 'lessonsContainer' }, ''); 
-      } else {
-        // إذا كان في الرئيسية، أظهر نافذة تأكيد الخروج
-        history.pushState({ level: 0, tab: 'lessonsContainer' }, ''); 
-        const exitModal = document.getElementById('exitConfirmModal');
-        if (exitModal) {
-          exitModal.classList.remove('hidden');
-          exitModal.classList.add('flex');
-        }
+    // 2. إذا كنا في التبويبات
+    const activeTab = document.querySelector('.app-tab:not(.hidden)')?.id || 'lessonsContainer';
+    
+    if (activeTab !== 'lessonsContainer') {
+      // ارجع للرئيسية
+      window.showAppTab('lessonsContainer');
+      history.pushState({ enjazTrap: true }, '', window.location.href); // نصب الفخ مجدداً
+    } else {
+      // إظهار نافذة الخروج
+      const exitModal = document.getElementById('exitConfirmModal');
+      if (exitModal) {
+        exitModal.classList.remove('hidden');
+        exitModal.classList.add('flex');
       }
+      history.pushState({ enjazTrap: true }, '', window.location.href); // نصب الفخ مجدداً
     }
   });
 
@@ -400,10 +398,8 @@
     document.getElementById('contactSubMenu').classList.toggle('hidden');
   };
 
-  // ✅ تعديل دالة التبويبات
-  window.showAppTab = function(tabName, skipHistory = false) {
-    const currentActiveTab = document.querySelector('.app-tab:not(.hidden)')?.id;
-    
+  // ✅ دالة التبويبات بدون تاريخ مزعج
+  window.showAppTab = function(tabName) {
     document.querySelectorAll('.app-tab').forEach(t => t.classList.add('hidden'));
     document.getElementById(tabName).classList.remove('hidden');
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('nav-active'));
@@ -415,14 +411,11 @@
     document.getElementById('trainingScreen').style.display = 'none';
     document.getElementById('supportScreen').style.display = 'none';
     document.getElementById('appFrame').style.display = 'block';
+    
     if (tabName === 'lessonsContainer') { document.getElementById('listView').style.display = 'none'; document.getElementById('gridView').style.display = 'block'; currentView = 'grid'; }
     if (tabName === 'savedContainer') renderBookmarks();
     if (tabName === 'libraryContainer') loadLibrary();
     try { sessionStorage.setItem('enjaz_active_tab', tabName); } catch(e) {}
-
-    if (!skipHistory && currentActiveTab !== tabName) {
-      history.pushState({ level: 0, tab: tabName }, '');
-    }
   };
 
   window.toggleTheme = function() {
@@ -625,7 +618,7 @@
         navLevel = 0;
         try { history.replaceState({ level: 0 }, ''); } catch(e) {}
         
-        window.showAppTab('lessonsContainer', true); // ✅ تعديل: إضافة true
+        window.showAppTab('lessonsContainer'); 
         
         btn.disabled = false;
         btn.innerText = isLogin ? "تسجيل الدخول" : "إنشاء حساب جديد";
@@ -769,7 +762,7 @@
         document.getElementById('recoverModal').classList.remove('flex');
         successBox.classList.add('hidden');
         loadLibrary();
-        window.showAppTab('libraryContainer', true); // ✅ تعديل: إضافة true
+        window.showAppTab('libraryContainer'); 
       }, 2000);
       
     } catch(e) {
@@ -1002,7 +995,7 @@
           while(navLevel > 0) { const st = appStack.pop(); navLevel--; applyCloseForState(st); }
           navLevel = 0;
           try { history.replaceState({ level: 0 }, ''); } catch(e) {}
-          window.showAppTab('libraryContainer', true); // ✅ تعديل: إضافة true
+          window.showAppTab('libraryContainer'); 
           if (codeToShow) {
             setTimeout(() => window.showRecoveryCodePopup(codeToShow), 500);
           }
@@ -1066,7 +1059,7 @@
           while(navLevel > 0) { const st = appStack.pop(); navLevel--; applyCloseForState(st); }
           navLevel = 0;
           try { history.replaceState({ level: 0 }, ''); } catch(e) {}
-          window.showAppTab('libraryContainer', true); // ✅ تعديل: إضافة true
+          window.showAppTab('libraryContainer'); 
         });
         return;
       }
@@ -1212,17 +1205,8 @@
 
     if (currentUser && currentUser.isAnonymous) {
       const purchasedFiles = currentUserData?.purchasedFiles || [];
-      
-      if (purchasedFiles.length === 0) {
-        html += `<div class="text-center mt-20 text-gray-400">
-          <i class="fas fa-book-bookmark text-5xl mb-4 block"></i>
-          <p>لا توجد مشتريات على هذا الجهاز.</p>
-          <p class="text-xs mt-2 text-gray-500">تصفح الدروس واشترِ ملفاتك الأولى!</p>
-        </div>`;
-        c.innerHTML = html;
-        return;
-      }
 
+      // ✅ 1. رسم الأزرار أولاً (تظهر دائماً للزوار)
       html += `
       <div class="grid grid-cols-3 gap-2 mb-4">
         <button onclick="openRecoverModal()" class="bg-gradient-to-l from-purple-500 to-indigo-500 text-white py-2.5 rounded-xl font-bold text-xs shadow-md active:scale-95 transition-transform flex flex-col items-center justify-center gap-1">
@@ -1238,6 +1222,18 @@
       <div id="downloadStatusText" class="text-xs text-blue-600 dark:text-blue-400 mb-3 hidden font-bold text-center"></div>
       `;
 
+      // ✅ 2. الآن تحقق إذا كانت السلة فارغة واعرض رسالة الترحيب
+      if (purchasedFiles.length === 0) {
+        html += `<div class="text-center mt-10 mb-20 text-gray-400">
+          <i class="fas fa-book-bookmark text-5xl mb-4 block"></i>
+          <p>لا توجد مشتريات على هذا الجهاز.</p>
+          <p class="text-xs mt-2 text-gray-500">هل اشتريت من جهاز آخر؟ اضغط على زر "استرجاع" بالأعلى ↑</p>
+        </div>`;
+        c.innerHTML = html;
+        return;
+      }
+
+      // ✅ 3. بقية الكود الخاص بعرض المشتريات وبانر التسجيل
       html += `<div class="bg-gradient-to-l from-emerald-50 to-teal-50 dark:from-slate-800 dark:to-slate-700 p-4 rounded-2xl shadow-md border border-emerald-200 dark:border-slate-600 mb-4 text-center">
         <i class="fas fa-shopping-bag text-4xl text-emerald-500 mb-2"></i>
         <h3 class="font-bold text-lg text-emerald-600 dark:text-emerald-400">مشترياتك المباشرة</h3>
@@ -1284,6 +1280,7 @@
       return;
     }
 
+    // ======= قسم المستخدم المسجل =======
     const ownedPackages = Array.isArray(currentUserData?.ownedPackages) ? currentUserData.ownedPackages : [];
     const legacyActivePackages = currentUserData?.activePackages || [];
     const purchasedFiles = currentUserData?.purchasedFiles || [];
@@ -2220,7 +2217,15 @@
     window.loadAppSettings(); 
     window.loadSlider();
     setTimeout(() => { if(!stateRestored) restoreState(); }, 1500);
-    setTimeout(hideSplash, 3000);
+    
+    // ✅ إخفاء شاشة الإقلاع قسرياً بعد 2 ثانية لمنع التعليق
+    setTimeout(() => {
+      const ss = document.getElementById('splashScreen');
+      if (ss && ss.style.display !== 'none') {
+        ss.classList.add('opacity-0');
+        setTimeout(() => { ss.style.display = 'none'; }, 500);
+      }
+    }, 2000);
 
     // ✅ تسجيل Service Worker للـ PWA
     if ('serviceWorker' in navigator) {
@@ -2229,12 +2234,10 @@
         .catch(err => console.warn('⚠️ PWA Service Worker failed', err));
     }
 
-    // ✅ إعداد سجل التصفح الأولي لاصطياد زر الرجوع
+    // ✅ تفعيل فخ زر الرجوع
     try {
-      if (!history.state || typeof history.state.level === 'undefined') {
-        history.replaceState({ level: 0, tab: 'lessonsContainer' }, '');
-        history.pushState({ level: 0, tab: 'lessonsContainer' }, '');
-      }
+      history.replaceState({ enjazTrap: true }, '', window.location.href);
+      history.pushState({ enjazTrap: true }, '', window.location.href);
     } catch(e) {}
   };
 </script>
