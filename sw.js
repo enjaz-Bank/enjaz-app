@@ -1,5 +1,5 @@
 // ⚠️ هام جداً: قم بتغيير الرقم مع كل تحديث تقوم به (v18 -> v20 -> v20 ...)
-const CACHE_NAME = 'enjaz-v21'; 
+const CACHE_NAME = 'enjaz-v22'; 
 
 const ASSETS_TO_CACHE = [
   './',
