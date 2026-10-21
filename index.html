@@ -211,19 +211,51 @@
   window.closeExitModal = function() {
     document.getElementById('exitConfirmModal').classList.add('hidden');
     document.getElementById('exitConfirmModal').classList.remove('flex');
-    // إعادة تفعيل فخ زر الرجوع
-    history.pushState({ enjazTrap: true }, '', window.location.href);
+    // ✅ إزالة من appStack بدلاً من إضافة history entry
+    if (appStack.length > 0 && appStack[appStack.length - 1].name === 'exitConfirmModal') {
+      appStack.pop();
+      navLevel = Math.max(0, navLevel - 1);
+      try { sessionStorage.setItem('enjaz_app_stack', JSON.stringify(appStack)); } catch(e) {}
+    }
+    // ✅ إعادة نصب الفخ مرة واحدة فقط إن لم يكن موجوداً
+    if (!history.state || !history.state.enjazTrap) {
+      history.pushState({ enjazTrap: true }, '', window.location.href);
+    }
   };
 
   window.confirmExitApp = function() {
     document.getElementById('exitConfirmModal').classList.add('hidden');
     document.getElementById('exitConfirmModal').classList.remove('flex');
-    // الخروج الآمن من تطبيقات TWA
-    if (history.state && history.state.enjazTrap) {
-      history.back(); 
-    } else {
-      window.location.href = "about:blank";
+    
+    // ✅ إزالة popstate handler لمنع إعادة فتح النافذة بعد history.back()
+    if (window._enjazPopstateHandler) {
+      window.removeEventListener('popstate', window._enjazPopstateHandler);
     }
+    
+    // ✅ إفراغ history بأكمله (مهم جداً لـ TWA - عند نفاد history يُغلق الأندرويد التطبيق)
+    try {
+      // استبدال الـ entry الحالي بـ entry "خروج" لتجنب أي state قديم
+      history.replaceState({ enjazExit: true }, '', window.location.href);
+      
+      // تراجع بعدد كبير من الخطوات لإفراغ history تماماً
+      const goBackSteps = Math.min(history.length, 50);
+      setTimeout(() => {
+        try {
+          history.go(-goBackSteps);
+          // ← بعد هذا، history فارغ → الأندرويد يُغلق التطبيق تلقائياً
+        } catch(e) {
+          console.warn('history.go failed:', e);
+        }
+      }, 50);
+    } catch(e) {
+      console.warn('Exit failed:', e);
+      try { window.close(); } catch(err) {}
+    }
+    
+    // ✅ Fallback أخير: إن لم يُغلق التطبيق خلال 1.5 ثانية (متصفح عادي)
+    setTimeout(() => {
+      try { window.location.href = 'about:blank'; } catch(e) {}
+    }, 1500);
   };
 
   function applyCloseForState(state) {
@@ -302,18 +334,21 @@
       case 'authScreen':
         document.getElementById('authScreen').classList.add('hidden');
         document.getElementById('authScreen').classList.remove('flex'); break;
+      case 'exitConfirmModal':
+        document.getElementById('exitConfirmModal').classList.add('hidden');
+        document.getElementById('exitConfirmModal').classList.remove('flex'); break;
     }
   }
 
-  // ✅ نظام اعتراض زر الرجوع (History Trap)
-  window.addEventListener('popstate', function (e) {
+  // ✅ نظام اعتراض زر الرجوع (History Trap) - كدالة مسمّاة لإزالتها عند الخروج
+  window._enjazPopstateHandler = function (e) {
     // 1. إذا كان هناك شاشة مفتوحة، أغلقها
     if (navLevel > 0) { 
       const st = appStack.pop(); 
       navLevel--; 
       applyCloseForState(st); 
-      try { sessionStorage.setItem('enjaz_app_stack', JSON.stringify(appStack)); } catch(e) {}
-      history.pushState({ enjazTrap: true }, '', window.location.href); // نصب الفخ مجدداً
+      try { sessionStorage.setItem('enjaz_app_stack', JSON.stringify(appStack)); } catch(e2) {}
+      history.pushState({ enjazTrap: true }, '', window.location.href);
       return; 
     }
 
@@ -323,17 +358,22 @@
     if (activeTab !== 'lessonsContainer') {
       // ارجع للرئيسية
       window.showAppTab('lessonsContainer');
-      history.pushState({ enjazTrap: true }, '', window.location.href); // نصب الفخ مجدداً
+      history.pushState({ enjazTrap: true }, '', window.location.href);
     } else {
-      // إظهار نافذة الخروج
+      // ✅ إظهار نافذة الخروج (مع تسجيلها في appStack لتتبع صحيح)
       const exitModal = document.getElementById('exitConfirmModal');
-      if (exitModal) {
+      if (exitModal && exitModal.classList.contains('hidden')) {
         exitModal.classList.remove('hidden');
         exitModal.classList.add('flex');
+        // ✅ تسجيل النافذة في appStack
+        appStack.push({ name: 'exitConfirmModal', data: null });
+        navLevel++;
       }
-      history.pushState({ enjazTrap: true }, '', window.location.href); // نصب الفخ مجدداً
+      history.pushState({ enjazTrap: true }, '', window.location.href);
     }
-  });
+  };
+
+  window.addEventListener('popstate', window._enjazPopstateHandler);
 
   document.addEventListener('click', function(e) {
     const menu = document.getElementById('socialMenu');
@@ -347,7 +387,14 @@
     if (appStack.length > 0 && appStack[appStack.length - 1].name === 'socialMenu') {
       appStack.pop();
       navLevel = Math.max(0, navLevel - 1);
-      try { sessionStorage.setItem('enjaz_app_stack', JSON.stringify(appStack)); } catch(err) {}
+      try { 
+        sessionStorage.setItem('enjaz_app_stack', JSON.stringify(appStack));
+        // ✅ إضافة: استهلاك entry الـ history الزائد لمنع تضارب الـ trap
+        // ملاحظة: history.back() هنا قد يُطلق popstate، لكن navLevel===0 فلن يحدث شيء
+        if (history.state && !history.state.enjazTrap) {
+          history.back();
+        }
+      } catch(err) {}
     }
   });
 
@@ -2218,14 +2265,14 @@
     window.loadSlider();
     setTimeout(() => { if(!stateRestored) restoreState(); }, 1500);
     
-    // ✅ إخفاء شاشة الإقلاع قسرياً بعد 2 ثانية لمنع التعليق
+    // ✅ إخفاء شاشة الإقلاع قسرياً بعد 800ms لمنع التعليق الطويل في TWA
     setTimeout(() => {
       const ss = document.getElementById('splashScreen');
       if (ss && ss.style.display !== 'none') {
         ss.classList.add('opacity-0');
-        setTimeout(() => { ss.style.display = 'none'; }, 500);
+        setTimeout(() => { if (ss) ss.style.display = 'none'; }, 200);
       }
-    }, 2000);
+    }, 800);
 
     // ✅ تسجيل Service Worker للـ PWA
     if ('serviceWorker' in navigator) {
@@ -2234,10 +2281,11 @@
         .catch(err => console.warn('⚠️ PWA Service Worker failed', err));
     }
 
-    // ✅ تفعيل فخ زر الرجوع
+    // ✅ تقوية الفخ: إضافة entries إضافية لمنع الإغلاق المفاجئ في TWA
     try {
-      history.replaceState({ enjazTrap: true }, '', window.location.href);
-      history.pushState({ enjazTrap: true }, '', window.location.href);
+      history.replaceState({ enjazTrap: true, level: 0 }, '', window.location.href);
+      // entry احتياطي إضافي
+      history.pushState({ enjazTrap: true, level: 0 }, '', window.location.href);
     } catch(e) {}
   };
 </script>
