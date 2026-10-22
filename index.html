@@ -223,41 +223,130 @@
     }
   };
 
+  // ✅ متغير لتتبع حالة "الخروج المؤقت" - عندما يكون true، أي ضغطة رجوع تُغلق التطبيق
+  window._enjazExitPending = false;
+
   window.confirmExitApp = function() {
+    // إخفاء نافذة الخروج
     document.getElementById('exitConfirmModal').classList.add('hidden');
     document.getElementById('exitConfirmModal').classList.remove('flex');
     
-    // ✅ إزالة جميع popstate handlers لمنع أي اعتراض للـ back button أثناء الخروج
+    // ✅ إزالة جميع popstate handlers (مهم جداً)
     if (window._enjazPopstateHandler) {
       window.removeEventListener('popstate', window._enjazPopstateHandler);
+      window._enjazPopstateHandler = null;
     }
     if (window._enjazTempPopstateHandler) {
       window.removeEventListener('popstate', window._enjazTempPopstateHandler);
+      window._enjazTempPopstateHandler = null;
     }
     
-    // ✅ محاولة window.close() - تعمل في بعض بيئات TWA
+    // ✅ محاولة window.close() (تعمل في بعض بيئات TWA)
     try { window.close(); } catch(e) {}
     
-    // ✅ في TWA: عند نفاد history، الأندرويد يُغلق التطبيق تلقائياً
-    // نستخدم history.go(-2) لأن لدينا 2 entries فقط (replaceState + pushState)
-    // go(-2) يتراجع للخلف مرتين = يخرج من الصفحة = Android يُغلق التطبيق
-    try {
-      // استبدال الـ entry الحالي بـ entry "خروج" لإزالة أي state
-      history.replaceState({ enjazExit: true }, '', window.location.href);
-      
-      // تنفيذ back مرتين مباشرة (بدون انتظار) - هذا يجب أن يُغلق التطبيق في TWA
-      setTimeout(function() {
-        try {
-          // تراجع لما قبل التطبيق (في TWA = إغلاق التطبيق)
-          history.go(-2);
-        } catch(e) {
-          console.warn('history.go failed:', e);
-          try { window.close(); } catch(err) {}
+    // ✅ إفراغ history تماماً - كل history.back() يزيل entry واحد
+    // نكررها حتى يصبح history فارغ
+    var exitAttempts = 0;
+    var emptyHistory = function() {
+      exitAttempts++;
+      if (exitAttempts > 15) {
+        // تجاوزنا الحد الأقصى - أظهر رسالة الإرشاد
+        showExitHint();
+        return;
+      }
+      try {
+        if (history.length > 1) {
+          history.back();
+          setTimeout(emptyHistory, 30);
+        } else {
+          // history فارغ الآن - أظهر رسالة الإرشاد
+          showExitHint();
         }
-      }, 50);
-    } catch(e) {
-      console.warn('Exit failed:', e);
-      try { window.close(); } catch(err) {}
+      } catch(e) {
+        showExitHint();
+      }
+    };
+    
+    // ✅ تفعيل وضع "الخروج المؤقت" - أي ضغطة رجوع ستُغلق التطبيق
+    window._enjazExitPending = true;
+    
+    // ✅ تركيب popstate handler بسيط: عندما يضغط المستخدم رجوع، نترك Android يُغلق التطبيق
+    // (لا نضيف trap entries جديدة)
+    window._enjazFinalExitHandler = function(e) {
+      // لا نفعل شيئاً - نترك Android يتعامل مع الضغطة ويُغلق التطبيق
+      // هذا يحقق الإغلاق الفعلي
+    };
+    window.addEventListener('popstate', window._enjazFinalExitHandler);
+    
+    // ابدأ إفراغ history
+    setTimeout(emptyHistory, 50);
+    
+    // ✅ أظهر رسالة الإرشاد بعد فترة قصيرة (في حال لم يُغلق التطبيق تلقائياً)
+    setTimeout(function() {
+      if (window._enjazExitPending) {
+        showExitHint();
+      }
+    }, 800);
+    
+    // ✅ دالة إظهار رسالة الإرشاد
+    function showExitHint() {
+      var hint = document.getElementById('exitHintModal');
+      if (hint) {
+        hint.classList.remove('hidden');
+        hint.classList.add('flex');
+      }
+    }
+  };
+
+  // ✅ إلغاء الخروج والبقاء في التطبيق
+  window.cancelExitHint = function() {
+    var hint = document.getElementById('exitHintModal');
+    if (hint) {
+      hint.classList.add('hidden');
+      hint.classList.remove('flex');
+    }
+    
+    // إلغاء وضع الخروج
+    window._enjazExitPending = false;
+    
+    // إزالة الـ final exit handler
+    if (window._enjazFinalExitHandler) {
+      window.removeEventListener('popstate', window._enjazFinalExitHandler);
+      window._enjazFinalExitHandler = null;
+    }
+    
+    // إعادة تركيب الفخ والـ handlers الأصلية
+    try {
+      history.pushState({ enjazTrap: true, level: 0 }, '', window.location.href);
+    } catch(e) {}
+    
+    // إعادة تركيب الـ temp handler (سيستبدله الـ real handler عند تحميله)
+    if (!window._enjazTempPopstateHandler && !window._enjazPopstateHandler) {
+      // إعادة تركيب temp handler
+      window._enjazTempPopstateHandler = function(e) {
+        if (typeof navLevel !== 'undefined' && typeof appStack !== 'undefined' && navLevel > 0) {
+          var st = appStack.pop();
+          navLevel--;
+          if (typeof applyCloseForState === 'function') applyCloseForState(st);
+          try { sessionStorage.setItem('enjaz_app_stack', JSON.stringify(appStack)); } catch(e2) {}
+          try { history.pushState({ enjazTrap: true }, '', window.location.href); } catch(e2) {}
+          return;
+        }
+        var activeTabEl = document.querySelector('.app-tab:not(.hidden)');
+        var activeTab = activeTabEl ? activeTabEl.id : 'lessonsContainer';
+        if (activeTab !== 'lessonsContainer') {
+          if (typeof window.showAppTab === 'function') window.showAppTab('lessonsContainer');
+          try { history.pushState({ enjazTrap: true }, '', window.location.href); } catch(e2) {}
+        } else {
+          var exitModal = document.getElementById('exitConfirmModal');
+          if (exitModal && exitModal.classList.contains('hidden')) {
+            exitModal.classList.remove('hidden');
+            exitModal.classList.add('flex');
+          }
+          try { history.pushState({ enjazTrap: true }, '', window.location.href); } catch(e2) {}
+        }
+      };
+      window.addEventListener('popstate', window._enjazTempPopstateHandler);
     }
   };
 
@@ -343,7 +432,8 @@
     }
   }
 
-  // ✅ نظام اعتراض زر الرجوع (History Trap) - كدالة مسمّاة لإزالتها عند الخروج
+  // ✅ نظام اعتراض زر الرجوع (History Trap) - مبسّط بدون نافذة خروج
+  // السلوك مطابق لتطبيقات أندرويد القياسية: رجوع من الرئيسية = إغلاق التطبيق
   window._enjazPopstateHandler = function (e) {
     // 1. إذا كان هناك شاشة مفتوحة، أغلقها
     if (navLevel > 0) { 
@@ -355,25 +445,17 @@
       return; 
     }
 
-    // 2. إذا كنا في التبويبات
+    // 2. إذا كنا في تبويب غير الرئيسية، ارجع للرئيسية
     const activeTab = document.querySelector('.app-tab:not(.hidden)')?.id || 'lessonsContainer';
-    
     if (activeTab !== 'lessonsContainer') {
-      // ارجع للرئيسية
       window.showAppTab('lessonsContainer');
       history.pushState({ enjazTrap: true }, '', window.location.href);
-    } else {
-      // ✅ إظهار نافذة الخروج (مع تسجيلها في appStack لتتبع صحيح)
-      const exitModal = document.getElementById('exitConfirmModal');
-      if (exitModal && exitModal.classList.contains('hidden')) {
-        exitModal.classList.remove('hidden');
-        exitModal.classList.add('flex');
-        // ✅ تسجيل النافذة في appStack
-        appStack.push({ name: 'exitConfirmModal', data: null });
-        navLevel++;
-      }
-      history.pushState({ enjazTrap: true }, '', window.location.href);
+      return;
     }
+
+    // 3. نحن في الرئيسية - لا نضع trap entry جديد
+    // السماح للأندرويد بإغلاق التطبيق بشكل طبيعي
+    // (نزيل الفخ بدلاً من إعادة نصبه - الأندرويد سيُغلق التطبيق)
   };
 
   // ✅ إزالة الـ temp handler المؤقت وتثبيت الـ handler الحقيقي
@@ -2545,16 +2627,12 @@
           history.pushState({ enjazTrap: true, level: 0 }, '', window.location.href);
         } catch(e) { console.warn('Initial trap setup failed:', e); }
 
-        // ✅ SMART temp popstate handler - same behavior as real handler
-        // This catches back button presses even before the real handler is installed
+        // ✅ Simplified temp popstate handler - no exit modal
         window._enjazTempPopstateHandler = function(e) {
-          // If the real handler is installed, delegate to it
           if (window._enjazPopstateHandler) {
             window._enjazPopstateHandler(e);
             return;
           }
-          // Temp handler behavior - mimics real handler:
-          // 1. If there are open screens tracked by appStack, close them
           if (typeof navLevel !== 'undefined' && typeof appStack !== 'undefined' && navLevel > 0) {
             var st = appStack.pop();
             navLevel--;
@@ -2563,7 +2641,6 @@
             try { history.pushState({ enjazTrap: true }, '', window.location.href); } catch(e2) {}
             return;
           }
-          // 2. If on a tab other than home, switch to home
           var activeTabEl = document.querySelector('.app-tab:not(.hidden)');
           var activeTab = activeTabEl ? activeTabEl.id : 'lessonsContainer';
           if (activeTab !== 'lessonsContainer') {
@@ -2571,15 +2648,8 @@
               window.showAppTab('lessonsContainer');
             }
             try { history.pushState({ enjazTrap: true }, '', window.location.href); } catch(e2) {}
-          } else {
-            // 3. We're on home tab - show exit modal
-            var exitModal = document.getElementById('exitConfirmModal');
-            if (exitModal && exitModal.classList.contains('hidden')) {
-              exitModal.classList.remove('hidden');
-              exitModal.classList.add('flex');
-            }
-            try { history.pushState({ enjazTrap: true }, '', window.location.href); } catch(e2) {}
           }
+          // If on home tab, don't re-trap - let Android close the app
         };
         window.addEventListener('popstate', window._enjazTempPopstateHandler);
       })();
@@ -2643,7 +2713,7 @@
       <div class="relative z-10 flex flex-col items-center text-center text-white pt-4">
         <img src="https://img.icons8.com/3d-fluency/96/graduation-cap.png" class="w-16 h-16 mb-2 drop-shadow-lg" alt="شعار">
         <h1 class="text-2xl font-extrabold tracking-tight drop-shadow-md">منصة إنجاز الأكاديمية</h1>
-        <p class="text-amber-300 mt-1 font-bold text-sm">البكالوريا العلمي - المنهاج السوري ✨ v2</p>
+        <p class="text-amber-300 mt-1 font-bold text-sm">البكالوريا العلمي - المنهاج السوري</p>
         
         <div class="flex gap-4 mt-3">
           <a href="https://www.instagram.com/injaz.bac?igsh=dTR0YjlnZHc1OHMx" target="_blank" class="text-white text-xl hover:scale-110 transition-transform" aria-label="إنستغرام"><i class="fab fa-instagram"></i></a>
@@ -2854,8 +2924,8 @@
     </div>
   </nav>
 
-  <!-- ✅ نافذة تأكيد الخروج من التطبيق -->
-  <div id="exitConfirmModal" class="fixed inset-0 z-[200] bg-black/60 hidden justify-center items-center p-4 backdrop-blur-sm">
+  <!-- ✅ نافذة تأكيد الخروج - معطّلة (تم إخفاؤها لتبني سلوك أندرويد القياسي) -->
+  <div id="exitConfirmModal" class="fixed inset-0 z-[200] bg-black/60 hidden justify-center items-center p-4 backdrop-blur-sm" style="display:none !important;">
     <div class="bg-white dark:bg-slate-800 rounded-3xl p-6 max-w-xs w-full text-center shadow-2xl">
       <div class="w-16 h-16 mx-auto bg-red-100 dark:bg-red-900/40 rounded-full flex items-center justify-center mb-4">
         <i class="fas fa-sign-out-alt text-3xl text-red-500"></i>
@@ -2866,6 +2936,25 @@
         <button onclick="closeExitModal()" class="flex-1 bg-gray-200 dark:bg-slate-700 text-gray-800 dark:text-white p-3 rounded-xl font-bold">إلغاء</button>
         <button onclick="confirmExitApp()" class="flex-1 bg-red-500 text-white p-3 rounded-xl font-bold">خروج</button>
       </div>
+    </div>
+  </div>
+
+  <!-- ✅ رسالة الإرشاد - معطّلة -->
+  <div id="exitHintModal" class="fixed inset-0 z-[201] bg-black/80 hidden justify-center items-center p-4 backdrop-blur-sm" style="display:none !important;">
+    <div class="bg-white dark:bg-slate-800 rounded-3xl p-8 max-w-xs w-full text-center shadow-2xl">
+      <div class="w-20 h-20 mx-auto bg-gradient-to-br from-indigo-400 to-indigo-600 rounded-full flex items-center justify-center mb-4 shadow-lg animate-pulse">
+        <i class="fas fa-arrow-right text-4xl text-white"></i>
+      </div>
+      <h3 class="text-xl font-extrabold text-gray-800 dark:text-white mb-2">اضغط زر الرجوع</h3>
+      <p class="text-gray-500 dark:text-gray-400 mb-2 text-sm leading-relaxed">
+        اضغط زر الرجوع في هاتفك <strong>مرة أخرى</strong> لإغلاق التطبيق تماماً
+      </p>
+      <p class="text-xs text-gray-400 dark:text-gray-500 mb-4">
+        (نظام أندرويد يتطلب ذلك لضمان الخروج الآمن)
+      </p>
+      <button onclick="cancelExitHint()" class="text-gray-400 hover:text-gray-600 text-sm py-2">
+        <i class="fas fa-times ml-1"></i> تراجع والبقاء في التطبيق
+      </button>
     </div>
   </div>
 
