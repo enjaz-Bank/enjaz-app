@@ -2,7 +2,7 @@
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">  
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes"> 
 <title>منصة إنجاز الأكاديمية</title>
 <!-- ✅ PWA Setup -->
 <meta name="theme-color" content="#4f46e5">
@@ -227,35 +227,38 @@
     document.getElementById('exitConfirmModal').classList.add('hidden');
     document.getElementById('exitConfirmModal').classList.remove('flex');
     
-    // ✅ إزالة popstate handler لمنع إعادة فتح النافذة بعد history.back()
+    // ✅ إزالة جميع popstate handlers لمنع أي اعتراض للـ back button أثناء الخروج
     if (window._enjazPopstateHandler) {
       window.removeEventListener('popstate', window._enjazPopstateHandler);
     }
+    if (window._enjazTempPopstateHandler) {
+      window.removeEventListener('popstate', window._enjazTempPopstateHandler);
+    }
     
-    // ✅ إفراغ history بأكمله (مهم جداً لـ TWA - عند نفاد history يُغلق الأندرويد التطبيق)
+    // ✅ محاولة window.close() - تعمل في بعض بيئات TWA
+    try { window.close(); } catch(e) {}
+    
+    // ✅ في TWA: عند نفاد history، الأندرويد يُغلق التطبيق تلقائياً
+    // نستخدم history.go(-2) لأن لدينا 2 entries فقط (replaceState + pushState)
+    // go(-2) يتراجع للخلف مرتين = يخرج من الصفحة = Android يُغلق التطبيق
     try {
-      // استبدال الـ entry الحالي بـ entry "خروج" لتجنب أي state قديم
+      // استبدال الـ entry الحالي بـ entry "خروج" لإزالة أي state
       history.replaceState({ enjazExit: true }, '', window.location.href);
       
-      // تراجع بعدد كبير من الخطوات لإفراغ history تماماً
-      const goBackSteps = Math.min(history.length, 50);
-      setTimeout(() => {
+      // تنفيذ back مرتين مباشرة (بدون انتظار) - هذا يجب أن يُغلق التطبيق في TWA
+      setTimeout(function() {
         try {
-          history.go(-goBackSteps);
-          // ← بعد هذا، history فارغ → الأندرويد يُغلق التطبيق تلقائياً
+          // تراجع لما قبل التطبيق (في TWA = إغلاق التطبيق)
+          history.go(-2);
         } catch(e) {
           console.warn('history.go failed:', e);
+          try { window.close(); } catch(err) {}
         }
       }, 50);
     } catch(e) {
       console.warn('Exit failed:', e);
       try { window.close(); } catch(err) {}
     }
-    
-    // ✅ Fallback أخير: إن لم يُغلق التطبيق خلال 1.5 ثانية (متصفح عادي)
-    setTimeout(() => {
-      try { window.location.href = 'about:blank'; } catch(e) {}
-    }, 1500);
   };
 
   function applyCloseForState(state) {
@@ -373,6 +376,11 @@
     }
   };
 
+  // ✅ إزالة الـ temp handler المؤقت وتثبيت الـ handler الحقيقي
+  if (window._enjazTempPopstateHandler) {
+    window.removeEventListener('popstate', window._enjazTempPopstateHandler);
+    window._enjazTempPopstateHandler = null;
+  }
   window.addEventListener('popstate', window._enjazPopstateHandler);
 
   document.addEventListener('click', function(e) {
@@ -2265,27 +2273,86 @@
     window.loadSlider();
     setTimeout(() => { if(!stateRestored) restoreState(); }, 1500);
     
-    // ✅ إخفاء شاشة الإقلاع قسرياً بعد 800ms لمنع التعليق الطويل في TWA
+    // ✅ إخفاء شاشة الإقلاع - نسخة احتياطية (النسخة الرئيسية تعمل من script مستقل أعلى الصفحة)
     setTimeout(() => {
       const ss = document.getElementById('splashScreen');
       if (ss && ss.style.display !== 'none') {
         ss.classList.add('opacity-0');
         setTimeout(() => { if (ss) ss.style.display = 'none'; }, 200);
       }
-    }, 800);
+    }, 1500);
 
-    // ✅ تسجيل Service Worker للـ PWA
+    // ✅ تسجيل Service Worker للـ PWA + التحديث التلقائي الذكي
     if ('serviceWorker' in navigator) {
+      // ✅ الاستماع لرسائل الـ Service Worker (إشعار التحديث)
+      navigator.serviceWorker.addEventListener('message', function(event) {
+        if (event.data && event.data.type === 'SW_UPDATED') {
+          console.log('🔄 تم اكتشاف نسخة جديدة:', event.data.version);
+          // ✅ إعادة تحميل الصفحة فوراً للحصول على النسخة الجديدة
+          // لكن فقط إذا لم يكن المستخدم في منتصف عمل (مثل تعبئة نموذج)
+          // نتحقق إن كان هناك شاشة نشطة مهمة
+          var activeModal = document.querySelector('#authScreen:not(.hidden), #premiumModal:not(.hidden), #singleBuyModal:not(.hidden)');
+          if (!activeModal) {
+            // تحديث فوري
+            window.location.reload();
+          } else {
+            // تأجيل التحديث حتى يُغلق المستخدم النموذج
+            console.log('⏳ التحديث مؤجل - المستخدم في نموذج');
+            window._enjazPendingUpdate = true;
+          }
+        }
+      });
+
+      // ✅ تسجيل الـ SW مع اكتشاف التحديثات
       navigator.serviceWorker.register('./sw.js')
-        .then(reg => console.log('✅ PWA Service Worker registered', reg.scope))
+        .then(reg => {
+          console.log('✅ PWA Service Worker registered', reg.scope);
+
+          // ✅ الاستماع لتحديثات الـ SW
+          reg.addEventListener('updatefound', () => {
+            const newWorker = reg.installing;
+            if (newWorker) {
+              newWorker.addEventListener('statechange', () => {
+                if (newWorker.state === 'installed') {
+                  if (navigator.serviceWorker.controller) {
+                    // ✅ يوجد نسخة جديدة - طلب skipWaiting
+                    console.log('🔄 نسخة جديدة مثبتة - طلب التفعيل');
+                    newWorker.postMessage({ type: 'SKIP_WAITING' });
+                  } else {
+                    // أول تثبيت - لا شيء
+                    console.log('✅ أول تثبيت للـ Service Worker');
+                  }
+                }
+              });
+            }
+          });
+        })
         .catch(err => console.warn('⚠️ PWA Service Worker failed', err));
+
+      // ✅ فحص التحديثات كل 10 دقائق
+      setInterval(() => {
+        navigator.serviceWorker.getRegistration().then(reg => {
+          if (reg) {
+            reg.update().catch(() => {});
+          }
+        }).catch(() => {});
+      }, 10 * 60 * 1000); // 10 دقائق
+
+      // ✅ عند عودة التطبيق من الخلفية (في TWA)، فحص التحديث
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+          navigator.serviceWorker.getRegistration().then(reg => {
+            if (reg) reg.update().catch(() => {});
+          }).catch(() => {});
+        }
+      });
     }
 
-    // ✅ تقوية الفخ: إضافة entries إضافية لمنع الإغلاق المفاجئ في TWA
+    // ✅ تقوية الفخ (احتياطي - الفخ الأساسي منصوب أعلى الصفحة في script مستقل)
     try {
-      history.replaceState({ enjazTrap: true, level: 0 }, '', window.location.href);
-      // entry احتياطي إضافي
-      history.pushState({ enjazTrap: true, level: 0 }, '', window.location.href);
+      if (!history.state || !history.state.enjazTrap) {
+        history.pushState({ enjazTrap: true, level: 0 }, '', window.location.href);
+      }
     } catch(e) {}
   };
 </script>
@@ -2456,7 +2523,69 @@
     <div class="absolute bottom-20 flex justify-center"><div class="w-10 h-10 border-4 border-indigo-200 border-t-white rounded-full animate-spin"></div></div>
   </div>
 
-  <div id="appFrame" class="w-full max-w-2xl relative pb-24 min-h-screen">
+  
+    <!-- ============================================ -->
+    <!-- ✅ STANDALONE EARLY LOADER (runs immediately, no dependency on window.onload or Firebase) -->
+    <!-- ============================================ -->
+    <script>
+      (function() {
+        // ✅ Hide splash screen aggressively after 800ms - INDEPENDENT of window.onload
+        setTimeout(function() {
+          var ss = document.getElementById('splashScreen');
+          if (ss && ss.style.display !== 'none') {
+            ss.classList.add('opacity-0');
+            setTimeout(function() { if (ss) ss.style.display = 'none'; }, 200);
+          }
+        }, 800);
+
+        // ✅ Set up history trap IMMEDIATELY - just 1 pushState (we want exit to be easy)
+        // 1 replaceState + 1 pushState = 2 entries total. Back from home = show modal. Back again = exit.
+        try {
+          history.replaceState({ enjazTrap: true, level: 0 }, '', window.location.href);
+          history.pushState({ enjazTrap: true, level: 0 }, '', window.location.href);
+        } catch(e) { console.warn('Initial trap setup failed:', e); }
+
+        // ✅ SMART temp popstate handler - same behavior as real handler
+        // This catches back button presses even before the real handler is installed
+        window._enjazTempPopstateHandler = function(e) {
+          // If the real handler is installed, delegate to it
+          if (window._enjazPopstateHandler) {
+            window._enjazPopstateHandler(e);
+            return;
+          }
+          // Temp handler behavior - mimics real handler:
+          // 1. If there are open screens tracked by appStack, close them
+          if (typeof navLevel !== 'undefined' && typeof appStack !== 'undefined' && navLevel > 0) {
+            var st = appStack.pop();
+            navLevel--;
+            if (typeof applyCloseForState === 'function') applyCloseForState(st);
+            try { sessionStorage.setItem('enjaz_app_stack', JSON.stringify(appStack)); } catch(e2) {}
+            try { history.pushState({ enjazTrap: true }, '', window.location.href); } catch(e2) {}
+            return;
+          }
+          // 2. If on a tab other than home, switch to home
+          var activeTabEl = document.querySelector('.app-tab:not(.hidden)');
+          var activeTab = activeTabEl ? activeTabEl.id : 'lessonsContainer';
+          if (activeTab !== 'lessonsContainer') {
+            if (typeof window.showAppTab === 'function') {
+              window.showAppTab('lessonsContainer');
+            }
+            try { history.pushState({ enjazTrap: true }, '', window.location.href); } catch(e2) {}
+          } else {
+            // 3. We're on home tab - show exit modal
+            var exitModal = document.getElementById('exitConfirmModal');
+            if (exitModal && exitModal.classList.contains('hidden')) {
+              exitModal.classList.remove('hidden');
+              exitModal.classList.add('flex');
+            }
+            try { history.pushState({ enjazTrap: true }, '', window.location.href); } catch(e2) {}
+          }
+        };
+        window.addEventListener('popstate', window._enjazTempPopstateHandler);
+      })();
+    </script>
+
+<div id="appFrame" class="w-full max-w-2xl relative pb-24 min-h-screen">
 
     <button onclick="openPackagesScreen()" class="fixed bottom-24 right-4 z-40 bg-amber-500 text-white p-4 rounded-full shadow-xl active:scale-90 transition-transform" aria-label="الباقات">
       <i class="fas fa-crown text-xl"></i>
