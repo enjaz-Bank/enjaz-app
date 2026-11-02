@@ -1735,18 +1735,96 @@
       sliderImages = [];
       snap.forEach(d => sliderImages.push(d.data().image));
       const container = document.getElementById('sliderContainer');
+      const dotsContainer = document.getElementById('sliderDots');
       if(sliderImages.length > 0) {
         container.classList.remove('hidden');
+        sliderIndex = 0;
         document.getElementById('sliderImg').src = sliderImages[0];
+
+        // ✅ بناء مؤشرات الدوائر
+        if (dotsContainer) {
+          dotsContainer.innerHTML = '';
+          sliderImages.forEach((_, i) => {
+            const dot = document.createElement('button');
+            dot.className = `slider-dot rounded-full transition-all duration-300 ${i === 0 ? 'bg-indigo-600 dark:bg-indigo-400 w-6 h-2' : 'bg-gray-300 dark:bg-slate-600 w-2 h-2 hover:bg-indigo-400'}`;
+            dot.style.cursor = 'pointer';
+            dot.setAttribute('aria-label', `الصورة ${i + 1}`);
+            dot.onclick = () => window.goToSlide(i);
+            dotsContainer.appendChild(dot);
+          });
+        }
+
         if(sliderInterval) clearInterval(sliderInterval);
         if(sliderImages.length > 1) {
           sliderInterval = setInterval(() => {
             sliderIndex = (sliderIndex + 1) % sliderImages.length;
-            document.getElementById('sliderImg').src = sliderImages[sliderIndex];
+            window.updateSlideUI();
           }, 4000);
         }
-      } else { container.classList.add('hidden'); }
+      } else {
+        container.classList.add('hidden');
+        if (dotsContainer) dotsContainer.innerHTML = '';
+      }
     });
+  };
+
+  // ✅ دالة تحديث الصورة والدوائر
+  window.updateSlideUI = function() {
+    const img = document.getElementById('sliderImg');
+    if (img) img.src = sliderImages[sliderIndex];
+    const dots = document.querySelectorAll('.slider-dot');
+    dots.forEach((dot, i) => {
+      if (i === sliderIndex) {
+        dot.className = 'slider-dot rounded-full transition-all duration-300 bg-indigo-600 dark:bg-indigo-400 w-6 h-2';
+      } else {
+        dot.className = 'slider-dot rounded-full transition-all duration-300 bg-gray-300 dark:bg-slate-600 w-2 h-2 hover:bg-indigo-400';
+      }
+    });
+  };
+
+  // ✅ التنقل للصورة التالية
+  window.sliderNext = function() {
+    if (sliderImages.length === 0) return;
+    sliderIndex = (sliderIndex + 1) % sliderImages.length;
+    window.updateSlideUI();
+    // إعادة تشغيل المؤقت
+    if (sliderInterval) clearInterval(sliderInterval);
+    if (sliderImages.length > 1) {
+      sliderInterval = setInterval(() => {
+        sliderIndex = (sliderIndex + 1) % sliderImages.length;
+        window.updateSlideUI();
+      }, 4000);
+    }
+  };
+
+  // ✅ التنقل للصورة السابقة
+  window.sliderPrev = function() {
+    if (sliderImages.length === 0) return;
+    sliderIndex = (sliderIndex - 1 + sliderImages.length) % sliderImages.length;
+    window.updateSlideUI();
+    // إعادة تشغيل المؤقت
+    if (sliderInterval) clearInterval(sliderInterval);
+    if (sliderImages.length > 1) {
+      sliderInterval = setInterval(() => {
+        sliderIndex = (sliderIndex + 1) % sliderImages.length;
+        window.updateSlideUI();
+      }, 4000);
+    }
+  };
+
+  // ✅ الانتقال المباشر لصورة معينة
+  window.goToSlide = function(index) {
+    if (sliderImages.length === 0) return;
+    sliderIndex = index;
+    window.updateSlideUI();
+    // إعادة تشغيل المؤقت
+    if (sliderInterval) clearInterval(sliderInterval);
+    if (sliderImages.length > 1) {
+      sliderInterval = setInterval(() => {
+        sliderIndex = (sliderIndex + 1) % sliderImages.length;
+        window.updateSlideUI();
+      }, 4000);
+    }
   };
 
   function hideSplash() {
@@ -2778,7 +2856,18 @@
             <i class="fas fa-arrow-left text-xl drop-shadow-sm"></i>
           </div>
           <div id="sliderContainer" class="mt-6 hidden">
-            <div class="rounded-2xl overflow-hidden shadow-lg bg-gray-200 dark:bg-slate-800 w-full" style="aspect-ratio: 16/9;"><img id="sliderImg" src="" class="w-full h-full object-cover transition-all duration-500" alt="سلايدر"></div>
+            <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-lg p-2 border border-gray-100 dark:border-slate-700">
+              <div class="relative w-full overflow-hidden rounded-xl bg-gray-50 dark:bg-slate-900" style="aspect-ratio: 16/9;">
+                <img id="sliderImg" src="" class="absolute inset-0 w-full h-full object-contain p-3 transition-all duration-500" alt="سلايدر">
+                <button onclick="sliderPrev()" class="absolute top-1/2 right-2 -translate-y-1/2 bg-white/80 dark:bg-slate-700/80 hover:bg-white dark:hover:bg-slate-600 text-indigo-600 dark:text-white rounded-full w-8 h-8 flex items-center justify-center shadow-md transition-colors" aria-label="السابق">
+                  <i class="fas fa-chevron-right text-xs"></i>
+                </button>
+                <button onclick="sliderNext()" class="absolute top-1/2 left-2 -translate-y-1/2 bg-white/80 dark:bg-slate-700/80 hover:bg-white dark:hover:bg-slate-600 text-indigo-600 dark:text-white rounded-full w-8 h-8 flex items-center justify-center shadow-md transition-colors" aria-label="التالي">
+                  <i class="fas fa-chevron-left text-xs"></i>
+                </button>
+              </div>
+              <div id="sliderDots" class="flex justify-center gap-1.5 mt-2"></div>
+            </div>
           </div>
         </div>
         <div id="listView" style="display:none;">
