@@ -15,7 +15,7 @@
  * ============================================ */
 
 // ⚠️ غيّر هذا الرقم مع كل تحديث للكود (v23 -> v24 -> v25 ...)
-const CACHE_NAME = 'enjaz-v23';
+const CACHE_NAME = 'enjaz-v25';
 
 const ASSETS_TO_CACHE = [
   './',
