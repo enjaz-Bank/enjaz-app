@@ -413,6 +413,10 @@
         document.getElementById('listView').style.display = 'none';
         document.getElementById('gridView').style.display = 'block';
         currentView = 'grid'; break;
+      case 'mathBranch':
+        // ✅ العودة من فرع الرياضيات إلى صندوقي الجبر/الهندسة
+        window.showMathBranches();
+        break;
       case 'singleBuyModal':
         document.getElementById('singleBuyModal').classList.add('hidden');
         document.getElementById('singleBuyModal').classList.remove('flex');
@@ -1735,96 +1739,18 @@
       sliderImages = [];
       snap.forEach(d => sliderImages.push(d.data().image));
       const container = document.getElementById('sliderContainer');
-      const dotsContainer = document.getElementById('sliderDots');
       if(sliderImages.length > 0) {
         container.classList.remove('hidden');
-        sliderIndex = 0;
         document.getElementById('sliderImg').src = sliderImages[0];
-
-        // ✅ بناء مؤشرات الدوائر
-        if (dotsContainer) {
-          dotsContainer.innerHTML = '';
-          sliderImages.forEach((_, i) => {
-            const dot = document.createElement('button');
-            dot.className = `slider-dot rounded-full transition-all duration-300 ${i === 0 ? 'bg-indigo-600 dark:bg-indigo-400 w-6 h-2' : 'bg-gray-300 dark:bg-slate-600 w-2 h-2 hover:bg-indigo-400'}`;
-            dot.style.cursor = 'pointer';
-            dot.setAttribute('aria-label', `الصورة ${i + 1}`);
-            dot.onclick = () => window.goToSlide(i);
-            dotsContainer.appendChild(dot);
-          });
-        }
-
         if(sliderInterval) clearInterval(sliderInterval);
         if(sliderImages.length > 1) {
           sliderInterval = setInterval(() => {
             sliderIndex = (sliderIndex + 1) % sliderImages.length;
-            window.updateSlideUI();
+            document.getElementById('sliderImg').src = sliderImages[sliderIndex];
           }, 4000);
         }
-      } else {
-        container.classList.add('hidden');
-        if (dotsContainer) dotsContainer.innerHTML = '';
-      }
+      } else { container.classList.add('hidden'); }
     });
-  };
-
-  // ✅ دالة تحديث الصورة والدوائر
-  window.updateSlideUI = function() {
-    const img = document.getElementById('sliderImg');
-    if (img) img.src = sliderImages[sliderIndex];
-    const dots = document.querySelectorAll('.slider-dot');
-    dots.forEach((dot, i) => {
-      if (i === sliderIndex) {
-        dot.className = 'slider-dot rounded-full transition-all duration-300 bg-indigo-600 dark:bg-indigo-400 w-6 h-2';
-      } else {
-        dot.className = 'slider-dot rounded-full transition-all duration-300 bg-gray-300 dark:bg-slate-600 w-2 h-2 hover:bg-indigo-400';
-      }
-    });
-  };
-
-  // ✅ التنقل للصورة التالية
-  window.sliderNext = function() {
-    if (sliderImages.length === 0) return;
-    sliderIndex = (sliderIndex + 1) % sliderImages.length;
-    window.updateSlideUI();
-    // إعادة تشغيل المؤقت
-    if (sliderInterval) clearInterval(sliderInterval);
-    if (sliderImages.length > 1) {
-      sliderInterval = setInterval(() => {
-        sliderIndex = (sliderIndex + 1) % sliderImages.length;
-        window.updateSlideUI();
-      }, 4000);
-    }
-  };
-
-  // ✅ التنقل للصورة السابقة
-  window.sliderPrev = function() {
-    if (sliderImages.length === 0) return;
-    sliderIndex = (sliderIndex - 1 + sliderImages.length) % sliderImages.length;
-    window.updateSlideUI();
-    // إعادة تشغيل المؤقت
-    if (sliderInterval) clearInterval(sliderInterval);
-    if (sliderImages.length > 1) {
-      sliderInterval = setInterval(() => {
-        sliderIndex = (sliderIndex + 1) % sliderImages.length;
-        window.updateSlideUI();
-      }, 4000);
-    }
-  };
-
-  // ✅ الانتقال المباشر لصورة معينة
-  window.goToSlide = function(index) {
-    if (sliderImages.length === 0) return;
-    sliderIndex = index;
-    window.updateSlideUI();
-    // إعادة تشغيل المؤقت
-    if (sliderInterval) clearInterval(sliderInterval);
-    if (sliderImages.length > 1) {
-      sliderInterval = setInterval(() => {
-        sliderIndex = (sliderIndex + 1) % sliderImages.length;
-        window.updateSlideUI();
-      }, 4000);
-    }
   };
 
   function hideSplash() {
@@ -1851,6 +1777,10 @@
         if (!hasCache) renderSkeletons(); 
       }
     );
+    // ✅ حماية 1: إخفاء الـ splash بعد 3 ثوانٍ كحد أقصى (حتى لو فشل Firestore)
+    setTimeout(() => { hideSplash(); }, 3000);
+    // ✅ حماية 2: إخفاء الـ splash بعد 6 ثوانٍ (إذا كان بطيئاً جداً)
+    setTimeout(() => { hideSplash(); }, 6000);
   };
 
   window.updateStats = function() {
@@ -1883,6 +1813,14 @@
   window.openSubject = function(subjectName, skipPush = false) {
     if (typeof skipPush !== 'boolean') skipPush = false;
     playClickSound();
+
+    // ✅ حالة خاصة: مادة الرياضيات → عرض صندوقين (جبر/هندسة)
+    if (normalizeSubject(subjectName) === normalizeSubject('رياضيات')) {
+      window.showMathBranches();
+      if(!skipPush) pushScreen('subjectList', { subject: subjectName });
+      return;
+    }
+
     document.getElementById('listTitle').innerText = subjectName;
     const container = document.getElementById('lessonsList');
     const filteredLessons = lessonsData.filter(l => normalizeSubject(l.subject) === normalizeSubject(subjectName));
@@ -1892,6 +1830,75 @@
     document.getElementById('listView').style.display = 'block';
     currentView = "list";
     if(!skipPush) pushScreen('subjectList', { subject: subjectName });
+  };
+
+  // ✅ عرض صناديق فروع الرياضيات (جبر / هندسة)
+  window.showMathBranches = function() {
+    const mathLessons = lessonsData.filter(l => normalizeSubject(l.subject) === normalizeSubject('رياضيات'));
+    // الدروس التي لها فرع محدد + الدروس القديمة بدون فرع (تُحسب لكلا الفرعين)
+    const algebraLessons = mathLessons.filter(l => !l.branch || l.branch === 'algebra');
+    const geometryLessons = mathLessons.filter(l => !l.branch || l.branch === 'geometry');
+
+    const container = document.getElementById('lessonsList');
+    container.innerHTML = `
+      <div class="mb-4">
+        <h2 class="text-md font-bold text-gray-800 dark:text-gray-200 mb-3 flex items-center gap-2">
+          <i class="fas fa-square-root-variable text-purple-500"></i>
+          اختر فرع الرياضيات
+        </h2>
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <!-- صندوق الجبر -->
+        <div onclick="openMathBranch('algebra')" class="card-hover bg-gradient-to-br from-blue-500 to-blue-700 p-4 rounded-3xl shadow-lg cursor-pointer active:scale-95 transition-transform duration-150 h-40 flex flex-col justify-between text-white relative overflow-hidden" role="button" tabindex="0" aria-label="جبر">
+          <div class="absolute top-0 left-0 w-24 h-24 bg-white/10 rounded-full -mt-10 -ml-10"></div>
+          <div class="flex justify-between items-start relative z-10">
+            <i class="fas fa-square-root-variable text-3xl opacity-90" aria-hidden="true"></i>
+            <span class="bg-white/25 backdrop-blur-sm px-2 py-1 rounded-full text-xs font-bold">${algebraLessons.length} درس</span>
+          </div>
+          <h3 class="text-lg font-extrabold leading-tight relative z-10">الجبر</h3>
+        </div>
+        <!-- صندوق الهندسة -->
+        <div onclick="openMathBranch('geometry')" class="card-hover bg-gradient-to-br from-slate-400 to-slate-600 p-4 rounded-3xl shadow-lg cursor-pointer active:scale-95 transition-transform duration-150 h-40 flex flex-col justify-between text-white relative overflow-hidden" role="button" tabindex="0" aria-label="هندسة">
+          <div class="absolute top-0 left-0 w-24 h-24 bg-white/10 rounded-full -mt-10 -ml-10"></div>
+          <div class="flex justify-between items-start relative z-10">
+            <i class="fas fa-drafting-compass text-3xl opacity-90" aria-hidden="true"></i>
+            <span class="bg-white/25 backdrop-blur-sm px-2 py-1 rounded-full text-xs font-bold">${geometryLessons.length} درس</span>
+          </div>
+          <h3 class="text-lg font-extrabold leading-tight relative z-10">الهندسة</h3>
+        </div>
+      </div>
+    `;
+    document.getElementById('listTitle').innerText = 'رياضيات';
+    document.getElementById('gridView').style.display = 'none';
+    document.getElementById('listView').style.display = 'block';
+    currentView = "list";
+  };
+
+  // ✅ فتح دروس فرع الرياضيات (جبر أو هندسة)
+  window.openMathBranch = function(branch, skipPush = false) {
+    if (typeof skipPush !== 'boolean') skipPush = false;
+    playClickSound();
+
+    const branchName = branch === 'algebra' ? 'الجبر' : 'الهندسة';
+    document.getElementById('listTitle').innerText = 'رياضيات - ' + branchName;
+
+    const container = document.getElementById('lessonsList');
+    // الدروس القديمة بدون فرع تظهر في كلا الفرعين
+    const filteredLessons = lessonsData.filter(l => {
+      if (normalizeSubject(l.subject) !== normalizeSubject('رياضيات')) return false;
+      if (!l.branch) return true;  // الدروس القديمة
+      return l.branch === branch;
+    });
+
+    if (filteredLessons.length === 0) {
+      container.innerHTML = `<div class="text-center mt-20 text-gray-400"><i class="far fa-folder-open text-5xl mb-4 block"></i><p>لا توجد دروس في ${branchName}.</p></div>`;
+    } else {
+      let listHTML = "";
+      filteredLessons.forEach(lesson => listHTML += renderLessonCard(lesson));
+      container.innerHTML = listHTML;
+    }
+    currentView = "list";
+    if(!skipPush) pushScreen('mathBranch', { branch });
   };
 
   window.renderBookmarks = function() {
@@ -2392,6 +2399,9 @@
           openCartScreen(true);
         } else if (last.name === 'subjectList' && last.data?.subject) {
           openSubject(last.data.subject, true);
+        } else if (last.name === 'mathBranch' && last.data?.branch) {
+          // ✅ استرجاع فرع الرياضيات
+          openMathBranch(last.data.branch, true);
         } else if (last.name === 'trainingScreen') {
           openTrainingScreen(true);
         } else if (last.name === 'supportScreen') {
@@ -2448,18 +2458,31 @@
       navigator.serviceWorker.addEventListener('message', function(event) {
         if (event.data && event.data.type === 'SW_UPDATED') {
           console.log('🔄 تم اكتشاف نسخة جديدة:', event.data.version);
-          // ✅ إعادة تحميل الصفحة فوراً للحصول على النسخة الجديدة
-          // لكن فقط إذا لم يكن المستخدم في منتصف عمل (مثل تعبئة نموذج)
-          // نتحقق إن كان هناك شاشة نشطة مهمة
+          
+          // ✅ تأجيل التحديث إذا كان المستخدم في نموذج مهم
           var activeModal = document.querySelector('#authScreen:not(.hidden), #premiumModal:not(.hidden), #singleBuyModal:not(.hidden)');
-          if (!activeModal) {
-            // تحديث فوري
-            window.location.reload();
-          } else {
-            // تأجيل التحديث حتى يُغلق المستخدم النموذج
+          if (activeModal) {
             console.log('⏳ التحديث مؤجل - المستخدم في نموذج');
             window._enjazPendingUpdate = true;
+            return;
           }
+          
+          // ✅ تأجيل التحديث إذا كان الـ splash ما زال ظاهراً (التطبيق لا يزال يحمّل)
+          var splash = document.getElementById('splashScreen');
+          if (splash && splash.style.display !== 'none') {
+            console.log('⏳ التحديث مؤجل - التطبيق لا يزال يحمّل');
+            window._enjazPendingUpdate = true;
+            // أعد المحاولة بعد 5 ثوانٍ
+            setTimeout(function() {
+              if (!document.querySelector('#authScreen:not(.hidden), #premiumModal:not(.hidden), #singleBuyModal:not(.hidden)')) {
+                window.location.reload();
+              }
+            }, 5000);
+            return;
+          }
+          
+          // ✅ تحديث فوري
+          window.location.reload();
         }
       });
 
@@ -2698,6 +2721,15 @@
           }
         }, 800);
 
+        // ✅ حماية إضافية: إخفاء الـ splash بعد 4 ثوانٍ كحد أقصى (بغض النظر عن أي شيء)
+        setTimeout(function() {
+          var ss = document.getElementById('splashScreen');
+          if (ss && ss.style.display !== 'none') {
+            console.warn('⚠️ إخفاء splash screen قسرياً بعد 4 ثوانٍ');
+            ss.style.display = 'none';
+          }
+        }, 4000);
+
         // ✅ Set up history trap IMMEDIATELY - just 1 pushState (we want exit to be easy)
         // 1 replaceState + 1 pushState = 2 entries total. Back from home = show modal. Back again = exit.
         try {
@@ -2856,18 +2888,7 @@
             <i class="fas fa-arrow-left text-xl drop-shadow-sm"></i>
           </div>
           <div id="sliderContainer" class="mt-6 hidden">
-            <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-lg p-2 border border-gray-100 dark:border-slate-700">
-              <div class="relative w-full overflow-hidden rounded-xl bg-gray-50 dark:bg-slate-900" style="aspect-ratio: 16/9;">
-                <img id="sliderImg" src="" class="absolute inset-0 w-full h-full object-contain p-3 transition-all duration-500" alt="سلايدر">
-                <button onclick="sliderPrev()" class="absolute top-1/2 right-2 -translate-y-1/2 bg-white/80 dark:bg-slate-700/80 hover:bg-white dark:hover:bg-slate-600 text-indigo-600 dark:text-white rounded-full w-8 h-8 flex items-center justify-center shadow-md transition-colors" aria-label="السابق">
-                  <i class="fas fa-chevron-right text-xs"></i>
-                </button>
-                <button onclick="sliderNext()" class="absolute top-1/2 left-2 -translate-y-1/2 bg-white/80 dark:bg-slate-700/80 hover:bg-white dark:hover:bg-slate-600 text-indigo-600 dark:text-white rounded-full w-8 h-8 flex items-center justify-center shadow-md transition-colors" aria-label="التالي">
-                  <i class="fas fa-chevron-left text-xs"></i>
-                </button>
-              </div>
-              <div id="sliderDots" class="flex justify-center gap-1.5 mt-2"></div>
-            </div>
+            <div class="rounded-2xl overflow-hidden shadow-lg bg-gray-200 dark:bg-slate-800 w-full" style="aspect-ratio: 16/9;"><img id="sliderImg" src="" class="w-full h-full object-cover transition-all duration-500" alt="سلايدر"></div>
           </div>
         </div>
         <div id="listView" style="display:none;">
