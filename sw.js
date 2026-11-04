@@ -13,7 +13,7 @@
  * ============================================ */
 
 // ⚠️ غيّر هذا الرقم مع كل تحديث للكود
-const CACHE_NAME = 'enjaz-v29';
+const CACHE_NAME = 'enjaz-v30';
 
 // ✅ كاش مخصص لموارد CDN الخارجية
 const CDN_CACHE_NAME = `${CACHE_NAME}-cdn`;
