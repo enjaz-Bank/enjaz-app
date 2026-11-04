@@ -2,7 +2,7 @@
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">  
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes"> 
 <title>منصة إنجاز الأكاديمية</title>
 <!-- ✅ PWA Setup -->
 <meta name="theme-color" content="#4f46e5">
@@ -409,6 +409,12 @@
       case 'cartScreen':
         document.getElementById('cartScreen').style.display = 'none';
         document.getElementById('appFrame').style.display = 'block'; break;
+      case 'notificationsScreen':
+        // ✅ إغلاق شاشة الإشعارات
+        document.getElementById('notificationsScreen').style.display = 'none';
+        document.getElementById('appFrame').style.display = 'block';
+        if (activeNotificationsUnsub) { activeNotificationsUnsub(); activeNotificationsUnsub = null; }
+        break;
       case 'subjectList':
         document.getElementById('listView').style.display = 'none';
         document.getElementById('gridView').style.display = 'block';
@@ -1739,18 +1745,96 @@
       sliderImages = [];
       snap.forEach(d => sliderImages.push(d.data().image));
       const container = document.getElementById('sliderContainer');
+      const dotsContainer = document.getElementById('sliderDots');
       if(sliderImages.length > 0) {
         container.classList.remove('hidden');
+        sliderIndex = 0;
         document.getElementById('sliderImg').src = sliderImages[0];
+
+        // ✅ بناء مؤشرات الدوائر
+        if (dotsContainer) {
+          dotsContainer.innerHTML = '';
+          sliderImages.forEach((_, i) => {
+            const dot = document.createElement('button');
+            dot.className = `slider-dot rounded-full transition-all duration-300 ${i === 0 ? 'bg-indigo-600 dark:bg-indigo-400 w-6 h-2' : 'bg-gray-300 dark:bg-slate-600 w-2 h-2 hover:bg-indigo-400'}`;
+            dot.style.cursor = 'pointer';
+            dot.setAttribute('aria-label', `الصورة ${i + 1}`);
+            dot.onclick = () => window.goToSlide(i);
+            dotsContainer.appendChild(dot);
+          });
+        }
+
         if(sliderInterval) clearInterval(sliderInterval);
         if(sliderImages.length > 1) {
           sliderInterval = setInterval(() => {
             sliderIndex = (sliderIndex + 1) % sliderImages.length;
-            document.getElementById('sliderImg').src = sliderImages[sliderIndex];
+            window.updateSlideUI();
           }, 4000);
         }
-      } else { container.classList.add('hidden'); }
+      } else {
+        container.classList.add('hidden');
+        if (dotsContainer) dotsContainer.innerHTML = '';
+      }
     });
+  };
+
+  // ✅ دالة تحديث الصورة والدوائر
+  window.updateSlideUI = function() {
+    const img = document.getElementById('sliderImg');
+    if (img) img.src = sliderImages[sliderIndex];
+    const dots = document.querySelectorAll('.slider-dot');
+    dots.forEach((dot, i) => {
+      if (i === sliderIndex) {
+        dot.className = 'slider-dot rounded-full transition-all duration-300 bg-indigo-600 dark:bg-indigo-400 w-6 h-2';
+      } else {
+        dot.className = 'slider-dot rounded-full transition-all duration-300 bg-gray-300 dark:bg-slate-600 w-2 h-2 hover:bg-indigo-400';
+      }
+    });
+  };
+
+  // ✅ التنقل للصورة التالية
+  window.sliderNext = function() {
+    if (sliderImages.length === 0) return;
+    sliderIndex = (sliderIndex + 1) % sliderImages.length;
+    window.updateSlideUI();
+    // إعادة تشغيل المؤقت
+    if (sliderInterval) clearInterval(sliderInterval);
+    if (sliderImages.length > 1) {
+      sliderInterval = setInterval(() => {
+        sliderIndex = (sliderIndex + 1) % sliderImages.length;
+        window.updateSlideUI();
+      }, 4000);
+    }
+  };
+
+  // ✅ التنقل للصورة السابقة
+  window.sliderPrev = function() {
+    if (sliderImages.length === 0) return;
+    sliderIndex = (sliderIndex - 1 + sliderImages.length) % sliderImages.length;
+    window.updateSlideUI();
+    // إعادة تشغيل المؤقت
+    if (sliderInterval) clearInterval(sliderInterval);
+    if (sliderImages.length > 1) {
+      sliderInterval = setInterval(() => {
+        sliderIndex = (sliderIndex + 1) % sliderImages.length;
+        window.updateSlideUI();
+      }, 4000);
+    }
+  };
+
+  // ✅ الانتقال المباشر لصورة معينة
+  window.goToSlide = function(index) {
+    if (sliderImages.length === 0) return;
+    sliderIndex = index;
+    window.updateSlideUI();
+    // إعادة تشغيل المؤقت
+    if (sliderInterval) clearInterval(sliderInterval);
+    if (sliderImages.length > 1) {
+      sliderInterval = setInterval(() => {
+        sliderIndex = (sliderIndex + 1) % sliderImages.length;
+        window.updateSlideUI();
+      }, 4000);
+    }
   };
 
   function hideSplash() {
@@ -1777,10 +1861,6 @@
         if (!hasCache) renderSkeletons(); 
       }
     );
-    // ✅ حماية 1: إخفاء الـ splash بعد 3 ثوانٍ كحد أقصى (حتى لو فشل Firestore)
-    setTimeout(() => { hideSplash(); }, 3000);
-    // ✅ حماية 2: إخفاء الـ splash بعد 6 ثوانٍ (إذا كان بطيئاً جداً)
-    setTimeout(() => { hideSplash(); }, 6000);
   };
 
   window.updateStats = function() {
@@ -2397,6 +2477,9 @@
           openPackagesScreen(true);
         } else if (last.name === 'cartScreen') {
           openCartScreen(true);
+        } else if (last.name === 'notificationsScreen') {
+          // ✅ استرجاع شاشة الإشعارات
+          openNotificationsScreen(true);
         } else if (last.name === 'subjectList' && last.data?.subject) {
           openSubject(last.data.subject, true);
         } else if (last.name === 'mathBranch' && last.data?.branch) {
@@ -2429,6 +2512,127 @@
     }
   }
 
+  // ============ ✅ نظام الإشعارات الداخلية ============
+  let allNotifications = [];
+  let activeNotificationsUnsub = null;
+  const NOTIF_READ_KEY = 'enjaz_read_notifications';
+
+  // ✅ الحصول على قائمة الإشعارات المقروءة من localStorage
+  function getReadNotifications() {
+    try {
+      const data = localStorage.getItem(NOTIF_READ_KEY);
+      return data ? JSON.parse(data) : [];
+    } catch(e) { return []; }
+  }
+
+  // ✅ حفظ قائمة الإشعارات المقروءة
+  function saveReadNotifications(arr) {
+    try { localStorage.setItem(NOTIF_READ_KEY, JSON.stringify(arr)); } catch(e) {}
+  }
+
+  // ✅ تحديث شارة الإشعارات (عدد غير المقروء)
+  function updateNotifBadge() {
+    const readIds = getReadNotifications();
+    const unread = allNotifications.filter(n => !readIds.includes(n.id));
+    const badge = document.getElementById('notifBadge');
+    if (!badge) return;
+    if (unread.length > 0) {
+      badge.classList.remove('hidden');
+      badge.innerText = unread.length > 9 ? '9+' : unread.length;
+    } else {
+      badge.classList.add('hidden');
+    }
+  }
+
+  // ✅ فتح شاشة الإشعارات
+  window.openNotificationsScreen = function(skipPush = false) {
+    if (typeof skipPush !== 'boolean') skipPush = false;
+    playClickSound();
+    document.getElementById('notificationsScreen').style.display = 'block';
+    document.getElementById('appFrame').style.display = 'none';
+    if (!skipPush) pushScreen('notificationsScreen');
+    loadNotifications();
+  };
+
+  // ✅ إغلاق شاشة الإشعارات
+  window.closeNotificationsScreen = function() { requestBack(); };
+
+  // ✅ تحميل الإشعارات من Firestore
+  function loadNotifications() {
+    if (activeNotificationsUnsub) activeNotificationsUnsub();
+    const q = query(collection(db, "notifications"));
+    activeNotificationsUnsub = onSnapshot(q, (snap) => {
+      allNotifications = [];
+      snap.forEach(d => allNotifications.push({ id: d.id, ...d.data() }));
+      // ترتيب: الأحدث أولاً
+      allNotifications.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+      renderNotifications();
+      updateNotifBadge();
+
+      // ✅ تعليم كل الإشعارات كمقروءة بعد 2 ثانية من فتح الشاشة
+      setTimeout(() => {
+        const readIds = getReadNotifications();
+        let updated = false;
+        allNotifications.forEach(n => {
+          if (!readIds.includes(n.id)) {
+            readIds.push(n.id);
+            updated = true;
+          }
+        });
+        if (updated) {
+          saveReadNotifications(readIds);
+          updateNotifBadge();
+        }
+      }, 2000);
+    }, (err) => {
+      console.warn('notifications load error:', err);
+      document.getElementById('notificationsList').innerHTML = '<p class="text-center text-gray-400 mt-10">تعذر تحميل الإشعارات. تحقق من اتصالك.</p>';
+    });
+  }
+
+  // ✅ عرض الإشعارات في الواجهة
+  function renderNotifications() {
+    const c = document.getElementById('notificationsList');
+    if (allNotifications.length === 0) {
+      c.innerHTML = `<div class="text-center mt-20 text-gray-400">
+        <i class="fas fa-bell-slash text-5xl mb-4 block"></i>
+        <p>لا توجد إشعارات حالياً.</p>
+        <p class="text-xs mt-2 text-gray-500">عد لاحقاً للاطلاع على آخر الأخبار</p>
+      </div>`;
+      return;
+    }
+
+    const readIds = getReadNotifications();
+    let html = '';
+    allNotifications.forEach(n => {
+      const isUnread = !readIds.includes(n.id);
+      const dateObj = n.createdAt?.seconds ? new Date(n.createdAt.seconds * 1000) : null;
+      const dateStr = dateObj ? dateObj.toLocaleDateString('ar-SY', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+      const timeStr = dateObj ? dateObj.toLocaleTimeString('ar-SY', { hour: '2-digit', minute: '2-digit' }) : '';
+
+      const cardBg = isUnread
+        ? 'bg-gradient-to-l from-amber-50 to-orange-50 dark:from-slate-800 dark:to-slate-700 border-amber-200 dark:border-slate-600'
+        : 'bg-white dark:bg-slate-800 border-gray-100 dark:border-slate-700';
+      const unreadDot = isUnread ? '<span class="w-2.5 h-2.5 bg-amber-500 rounded-full flex-shrink-0 animate-pulse"></span>' : '<span class="w-2.5 h-2.5 bg-gray-200 dark:bg-slate-600 rounded-full flex-shrink-0"></span>';
+
+      html += `
+        <div class="${cardBg} border-2 rounded-2xl p-4 shadow-sm">
+          <div class="flex items-start gap-3">
+            ${unreadDot}
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center justify-between gap-2 mb-1">
+                <h4 class="font-extrabold text-gray-800 dark:text-gray-100 text-sm">${n.title || 'إشعار'}</h4>
+                <span class="text-[10px] text-gray-400 dark:text-gray-500 whitespace-nowrap">${dateStr} ${timeStr}</span>
+              </div>
+              <p class="text-sm text-gray-600 dark:text-gray-300 leading-relaxed">${n.body || ''}</p>
+            </div>
+          </div>
+        </div>
+      `;
+    });
+    c.innerHTML = html;
+  }
+
   window.onload = function() {
     if (localStorage.getItem('enjaz_theme') === 'dark') { 
       document.documentElement.classList.add('dark'); 
@@ -2441,6 +2645,8 @@
     window.loadAppExams(); 
     window.loadAppSettings(); 
     window.loadSlider();
+    // ✅ تحميل الإشعارات لتحديث الشارة الحمراء
+    setTimeout(() => { loadNotifications(); }, 2000);
     setTimeout(() => { if(!stateRestored) restoreState(); }, 1500);
     
     // ✅ إخفاء شاشة الإقلاع - نسخة احتياطية (النسخة الرئيسية تعمل من script مستقل أعلى الصفحة)
@@ -2458,31 +2664,18 @@
       navigator.serviceWorker.addEventListener('message', function(event) {
         if (event.data && event.data.type === 'SW_UPDATED') {
           console.log('🔄 تم اكتشاف نسخة جديدة:', event.data.version);
-          
-          // ✅ تأجيل التحديث إذا كان المستخدم في نموذج مهم
+          // ✅ إعادة تحميل الصفحة فوراً للحصول على النسخة الجديدة
+          // لكن فقط إذا لم يكن المستخدم في منتصف عمل (مثل تعبئة نموذج)
+          // نتحقق إن كان هناك شاشة نشطة مهمة
           var activeModal = document.querySelector('#authScreen:not(.hidden), #premiumModal:not(.hidden), #singleBuyModal:not(.hidden)');
-          if (activeModal) {
+          if (!activeModal) {
+            // تحديث فوري
+            window.location.reload();
+          } else {
+            // تأجيل التحديث حتى يُغلق المستخدم النموذج
             console.log('⏳ التحديث مؤجل - المستخدم في نموذج');
             window._enjazPendingUpdate = true;
-            return;
           }
-          
-          // ✅ تأجيل التحديث إذا كان الـ splash ما زال ظاهراً (التطبيق لا يزال يحمّل)
-          var splash = document.getElementById('splashScreen');
-          if (splash && splash.style.display !== 'none') {
-            console.log('⏳ التحديث مؤجل - التطبيق لا يزال يحمّل');
-            window._enjazPendingUpdate = true;
-            // أعد المحاولة بعد 5 ثوانٍ
-            setTimeout(function() {
-              if (!document.querySelector('#authScreen:not(.hidden), #premiumModal:not(.hidden), #singleBuyModal:not(.hidden)')) {
-                window.location.reload();
-              }
-            }, 5000);
-            return;
-          }
-          
-          // ✅ تحديث فوري
-          window.location.reload();
         }
       });
 
@@ -2721,15 +2914,6 @@
           }
         }, 800);
 
-        // ✅ حماية إضافية: إخفاء الـ splash بعد 4 ثوانٍ كحد أقصى (بغض النظر عن أي شيء)
-        setTimeout(function() {
-          var ss = document.getElementById('splashScreen');
-          if (ss && ss.style.display !== 'none') {
-            console.warn('⚠️ إخفاء splash screen قسرياً بعد 4 ثوانٍ');
-            ss.style.display = 'none';
-          }
-        }, 4000);
-
         // ✅ Set up history trap IMMEDIATELY - just 1 pushState (we want exit to be easy)
         // 1 replaceState + 1 pushState = 2 entries total. Back from home = show modal. Back again = exit.
         try {
@@ -2838,9 +3022,15 @@
         <div class="grid grid-cols-3 gap-2 text-center">
           <div><p class="text-2xl font-extrabold text-indigo-600 dark:text-indigo-400" id="statLessons">0</p><p class="text-sm font-bold text-gray-700 dark:text-gray-300 mt-1">الدرس</p></div>
           <div class="border-r border-l border-gray-200 dark:border-slate-600"><p class="text-2xl font-extrabold text-emerald-600 dark:text-emerald-400" id="statSubjects">0</p><p class="text-sm font-bold text-gray-700 dark:text-gray-300 mt-1">المادة</p></div>
-          <div><p class="text-2xl font-extrabold text-amber-600 dark:text-amber-400">75%</p><p class="text-sm font-bold text-gray-700 dark:text-gray-300 mt-1">الإنجاز</p></div>
+          <!-- ✅ زر الإشعارات بدلاً من نسبة الإنجاز -->
+          <div class="relative">
+            <button onclick="openNotificationsScreen()" class="relative inline-flex items-center justify-center w-full" aria-label="الإشعارات">
+              <i class="fas fa-bell text-3xl text-amber-500 dark:text-amber-400"></i>
+              <span id="notifBadge" class="hidden absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1 animate-pulse">0</span>
+            </button>
+            <p class="text-sm font-bold text-gray-700 dark:text-gray-300 mt-1">الإشعارات</p>
+          </div>
         </div>
-        <div class="w-full bg-gray-200 dark:bg-slate-700 rounded-full h-1.5 mt-3 overflow-hidden"><div id="progressBar" class="bg-gradient-to-r from-emerald-400 to-emerald-600 h-full rounded-full" style="width: 0%"></div></div>
       </div>
     </div>
 
@@ -2888,7 +3078,18 @@
             <i class="fas fa-arrow-left text-xl drop-shadow-sm"></i>
           </div>
           <div id="sliderContainer" class="mt-6 hidden">
-            <div class="rounded-2xl overflow-hidden shadow-lg bg-gray-200 dark:bg-slate-800 w-full" style="aspect-ratio: 16/9;"><img id="sliderImg" src="" class="w-full h-full object-cover transition-all duration-500" alt="سلايدر"></div>
+            <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-lg p-2 border border-gray-100 dark:border-slate-700">
+              <div class="relative w-full overflow-hidden rounded-xl bg-gray-50 dark:bg-slate-900" style="aspect-ratio: 16/9;">
+                <img id="sliderImg" src="" class="absolute inset-0 w-full h-full object-contain p-3 transition-all duration-500" alt="سلايدر">
+                <button onclick="sliderPrev()" class="absolute top-1/2 right-2 -translate-y-1/2 bg-white/80 dark:bg-slate-700/80 hover:bg-white dark:hover:bg-slate-600 text-indigo-600 dark:text-white rounded-full w-8 h-8 flex items-center justify-center shadow-md transition-colors" aria-label="السابق">
+                  <i class="fas fa-chevron-right text-xs"></i>
+                </button>
+                <button onclick="sliderNext()" class="absolute top-1/2 left-2 -translate-y-1/2 bg-white/80 dark:bg-slate-700/80 hover:bg-white dark:hover:bg-slate-600 text-indigo-600 dark:text-white rounded-full w-8 h-8 flex items-center justify-center shadow-md transition-colors" aria-label="التالي">
+                  <i class="fas fa-chevron-left text-xs"></i>
+                </button>
+              </div>
+              <div id="sliderDots" class="flex justify-center gap-1.5 mt-2"></div>
+            </div>
           </div>
         </div>
         <div id="listView" style="display:none;">
@@ -3023,6 +3224,28 @@
       </div>
     </div>
     <div class="flex-1 overflow-hidden bg-white dark:bg-slate-900 relative z-10 w-full"><iframe id="viewerFrame" class="w-full h-full" sandbox="allow-scripts allow-same-origin allow-popups allow-forms allow-modals allow-downloads" style="border: none; height: calc(100vh - 75px);"></iframe></div>
+  </div>
+
+  <!-- ✅ شاشة الإشعارات -->
+  <div id="notificationsScreen" class="fixed inset-0 mx-auto max-w-2xl bg-slate-50 dark:bg-slate-900 z-[50] w-full overflow-y-auto pb-24" style="display:none;">
+    <div class="relative bg-gradient-to-br from-amber-500 to-orange-600 dark:from-slate-900 dark:to-slate-800 pt-16 pb-12 px-5 rounded-b-[2rem] shadow-xl overflow-hidden w-full">
+      <button onclick="closeNotificationsScreen()" class="absolute top-4 right-4 bg-white/20 p-2 rounded-full z-10" aria-label="رجوع"><i class="fas fa-arrow-right text-lg text-white"></i></button>
+      <div class="relative z-10 flex flex-col items-center text-center text-white pt-6">
+        <div class="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center mb-3">
+          <i class="fas fa-bell text-3xl"></i>
+        </div>
+        <h1 class="text-2xl font-extrabold">الإشعارات</h1>
+        <p class="text-amber-100 mt-1 text-sm">آخر الأخبار والإعلانات</p>
+      </div>
+    </div>
+    <div class="p-4 w-full">
+      <div id="notificationsList" class="space-y-3 mt-2">
+        <div class="text-center mt-10">
+          <div class="w-8 h-8 border-4 border-amber-200 border-t-amber-600 rounded-full animate-spin mx-auto"></div>
+          <p class="text-gray-400 mt-2 text-sm">جاري تحميل الإشعارات...</p>
+        </div>
+      </div>
+    </div>
   </div>
 
   <nav id="navBar" class="fixed bottom-0 left-0 right-0 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md shadow-2xl border-t border-gray-100 dark:border-slate-800 z-[70] max-w-2xl mx-auto" style="border-radius: 1rem;">
