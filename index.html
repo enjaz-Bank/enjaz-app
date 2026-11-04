@@ -13,31 +13,7 @@
 <script src="https://cdn.tailwindcss.com"></script>
 <script>
   tailwind.config = {
-    darkMode: 'class',
-    safelist: [
-      // ألوان بطاقات المواد (gradients)
-      'from-purple-500', 'to-purple-700',
-      'from-blue-500', 'to-blue-700',
-      'from-cyan-500', 'to-cyan-700',
-      'from-green-500', 'to-green-700',
-      'from-red-500', 'to-red-700',
-      'from-amber-500', 'to-amber-700',
-      'from-pink-500', 'to-pink-700',
-      'from-emerald-600', 'to-emerald-800',
-      'from-slate-400', 'to-slate-600',
-      'from-indigo-500', 'to-violet-700',
-      'from-teal-500', 'to-cyan-700',
-      // ألوان إضافية للبطاقات المختلفة
-      'from-indigo-500', 'to-indigo-700',
-      'from-orange-500', 'to-orange-600',
-      'from-amber-500', 'to-orange-600',
-      'from-blue-600', 'to-indigo-600',
-      'from-amber-50', 'to-yellow-50',
-      'from-blue-50', 'to-indigo-50',
-      'from-emerald-50', 'to-teal-50',
-      'from-rose-50', 'to-pink-50',
-      'from-amber-50', 'to-orange-50'
-    ]
+    darkMode: 'class'
   }
 </script>
 
@@ -121,14 +97,14 @@
   const CACHE_KEY_LIBRARY = 'enjaz_library_cache_v1';
 
   const fixedSubjects = [
-    { name: "رياضيات", color: "from-purple-500 to-purple-700", icon: "fa-square-root-variable" },
-    { name: "الفيزياء", color: "from-blue-500 to-blue-700", icon: "fa-atom" },
-    { name: "الكيمياء", color: "from-cyan-500 to-cyan-700", icon: "fa-flask" },
-    { name: "العلوم", color: "from-green-500 to-green-700", icon: "fa-dna" },
-    { name: "اللغة العربية", color: "from-red-500 to-red-700", icon: "fa-book-open" },
-    { name: "اللغة الانكليزية", color: "from-amber-500 to-amber-700", icon: "fa-language" },
-    { name: "اللغةالفرنسية", color: "from-pink-500 to-pink-700", icon: "fa-comments" },
-    { name: "التربية الاسلامية", color: "from-emerald-600 to-emerald-800", icon: "fa-mosque" }
+    { name: "رياضيات", gradient: "linear-gradient(135deg, #a855f7 0%, #7e22ce 100%)", icon: "fa-square-root-variable" },
+    { name: "الفيزياء", gradient: "linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)", icon: "fa-atom" },
+    { name: "الكيمياء", gradient: "linear-gradient(135deg, #06b6d4 0%, #0e7490 100%)", icon: "fa-flask" },
+    { name: "العلوم", gradient: "linear-gradient(135deg, #22c55e 0%, #15803d 100%)", icon: "fa-dna" },
+    { name: "اللغة العربية", gradient: "linear-gradient(135deg, #ef4444 0%, #b91c1c 100%)", icon: "fa-book-open" },
+    { name: "اللغة الانكليزية", gradient: "linear-gradient(135deg, #f59e0b 0%, #b45309 100%)", icon: "fa-language" },
+    { name: "اللغةالفرنسية", gradient: "linear-gradient(135deg, #ec4899 0%, #be185d 100%)", icon: "fa-comments" },
+    { name: "التربية الاسلامية", gradient: "linear-gradient(135deg, #059669 0%, #065f46 100%)", icon: "fa-mosque" }
   ];
 
   let navLevel = 0;
@@ -1886,15 +1862,38 @@
       }, (err) => { 
         console.warn('Error:', err); 
         hideSplash(); 
-        if (!hasCache) renderSkeletons(); 
+        // ✅ حتى لو فشل Firestore، اعرض البطاقات (بعدد 0 دروس)
+        if (!hasCache) renderGrid();
       }
     );
+    // ✅ حماية: إخفاء الـ splash بعد 3 ثوانٍ كحد أقصى
+    setTimeout(() => { hideSplash(); }, 3000);
+    setTimeout(() => { hideSplash(); }, 6000);
+    // ✅ ضمان عرض البطاقات حتى لو فشل Firestore أو بطأ (الأهم!)
+    setTimeout(() => {
+      const grid = document.getElementById('lessonsGrid');
+      if (grid && grid.innerHTML.includes('animate-pulse')) {
+        console.warn('⚠️ استدعاء renderGrid قسرياً بعد 4 ثوانٍ');
+        renderGrid();
+      }
+    }, 4000);
+    setTimeout(() => {
+      const grid = document.getElementById('lessonsGrid');
+      if (grid && grid.innerHTML.includes('animate-pulse')) {
+        console.warn('⚠️ استدعاء renderGrid قسرياً بعد 8 ثوانٍ');
+        renderGrid();
+      }
+    }, 8000);
   };
 
   window.updateStats = function() {
-    document.getElementById('statLessons').innerText = lessonsData.length;
-    document.getElementById('statSubjects').innerText = fixedSubjects.length;
-    document.getElementById('progressBar').style.width = "75%";
+    const statLessons = document.getElementById('statLessons');
+    const statSubjects = document.getElementById('statSubjects');
+    if (statLessons) statLessons.innerText = lessonsData.length;
+    if (statSubjects) statSubjects.innerText = fixedSubjects.length;
+    // ✅ progressBar لم يعد موجوداً (استُبدل بزر الإشعارات)
+    const progressBar = document.getElementById('progressBar');
+    if (progressBar) progressBar.style.width = "75%";
   };
 
   window.renderSkeletons = function() {
@@ -1907,7 +1906,7 @@
     let finalHTML = "";
     fixedSubjects.forEach(sub => {
       const count = lessonsData.filter(l => normalizeSubject(l.subject) === normalizeSubject(sub.name)).length;
-      finalHTML += `<div onclick="openSubject('${sub.name}')" class="card-hover bg-gradient-to-br ${sub.color} p-4 rounded-3xl shadow-lg cursor-pointer active:scale-95 transition-transform duration-150 h-40 flex flex-col justify-between text-white relative overflow-hidden" role="button" tabindex="0" aria-label="مادة ${sub.name}"><div class="absolute top-0 left-0 w-24 h-24 bg-white/10 rounded-full -mt-10 -ml-10"></div><div class="flex justify-between items-start relative z-10"><i class="fas ${sub.icon} text-3xl opacity-90" aria-hidden="true"></i><span class="bg-white/25 backdrop-blur-sm px-2 py-1 rounded-full text-xs font-bold">${count} درس</span></div><h3 class="text-lg font-extrabold leading-tight relative z-10">${sub.name}</h3></div>`;
+      finalHTML += `<div onclick="openSubject('${sub.name}')" style="background: ${sub.gradient};" class="card-hover p-4 rounded-3xl shadow-lg cursor-pointer active:scale-95 transition-transform duration-150 h-40 flex flex-col justify-between text-white relative overflow-hidden" role="button" tabindex="0" aria-label="مادة ${sub.name}"><div class="absolute top-0 left-0 w-24 h-24 bg-white/10 rounded-full -mt-10 -ml-10"></div><div class="flex justify-between items-start relative z-10"><i class="fas ${sub.icon} text-3xl opacity-90" aria-hidden="true"></i><span class="bg-white/25 backdrop-blur-sm px-2 py-1 rounded-full text-xs font-bold">${count} درس</span></div><h3 class="text-lg font-extrabold leading-tight relative z-10">${sub.name}</h3></div>`;
     });
     document.getElementById('lessonsGrid').innerHTML = finalHTML;
   };
@@ -1957,7 +1956,7 @@
       </div>
       <div class="grid grid-cols-2 gap-3">
         <!-- صندوق الجبر -->
-        <div onclick="openMathBranch('algebra')" class="card-hover bg-gradient-to-br from-blue-500 to-blue-700 p-4 rounded-3xl shadow-lg cursor-pointer active:scale-95 transition-transform duration-150 h-40 flex flex-col justify-between text-white relative overflow-hidden" role="button" tabindex="0" aria-label="جبر">
+        <div onclick="openMathBranch('algebra')" style="background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);" class="card-hover p-4 rounded-3xl shadow-lg cursor-pointer active:scale-95 transition-transform duration-150 h-40 flex flex-col justify-between text-white relative overflow-hidden" role="button" tabindex="0" aria-label="جبر">
           <div class="absolute top-0 left-0 w-24 h-24 bg-white/10 rounded-full -mt-10 -ml-10"></div>
           <div class="flex justify-between items-start relative z-10">
             <i class="fas fa-square-root-variable text-3xl opacity-90" aria-hidden="true"></i>
@@ -1966,7 +1965,7 @@
           <h3 class="text-lg font-extrabold leading-tight relative z-10">الجبر</h3>
         </div>
         <!-- صندوق الهندسة -->
-        <div onclick="openMathBranch('geometry')" class="card-hover bg-gradient-to-br from-slate-400 to-slate-600 p-4 rounded-3xl shadow-lg cursor-pointer active:scale-95 transition-transform duration-150 h-40 flex flex-col justify-between text-white relative overflow-hidden" role="button" tabindex="0" aria-label="هندسة">
+        <div onclick="openMathBranch('geometry')" style="background: linear-gradient(135deg, #94a3b8 0%, #475569 100%);" class="card-hover p-4 rounded-3xl shadow-lg cursor-pointer active:scale-95 transition-transform duration-150 h-40 flex flex-col justify-between text-white relative overflow-hidden" role="button" tabindex="0" aria-label="هندسة">
           <div class="absolute top-0 left-0 w-24 h-24 bg-white/10 rounded-full -mt-10 -ml-10"></div>
           <div class="flex justify-between items-start relative z-10">
             <i class="fas fa-drafting-compass text-3xl opacity-90" aria-hidden="true"></i>
@@ -2580,12 +2579,28 @@
     document.getElementById('appFrame').style.display = 'none';
     if (!skipPush) pushScreen('notificationsScreen');
     loadNotifications();
+
+    // ✅ تعليم كل الإشعارات كمقروءة بعد 3 ثوانٍ من فتح الشاشة فعلياً
+    setTimeout(() => {
+      const readIds = getReadNotifications();
+      let updated = false;
+      allNotifications.forEach(n => {
+        if (!readIds.includes(n.id)) {
+          readIds.push(n.id);
+          updated = true;
+        }
+      });
+      if (updated) {
+        saveReadNotifications(readIds);
+        updateNotifBadge();
+      }
+    }, 3000);
   };
 
   // ✅ إغلاق شاشة الإشعارات
   window.closeNotificationsScreen = function() { requestBack(); };
 
-  // ✅ تحميل الإشعارات من Firestore
+  // ✅ تحميل الإشعارات من Firestore (للعرض والتحديث فقط - بدون تعليم كمقروء)
   function loadNotifications() {
     if (activeNotificationsUnsub) activeNotificationsUnsub();
     const q = query(collection(db, "notifications"));
@@ -2594,27 +2609,18 @@
       snap.forEach(d => allNotifications.push({ id: d.id, ...d.data() }));
       // ترتيب: الأحدث أولاً
       allNotifications.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
-      renderNotifications();
+      // عرض الإشعارات فقط إذا كانت الشاشة مفتوحة فعلاً
+      const isScreenOpen = document.getElementById('notificationsScreen').style.display === 'block';
+      if (isScreenOpen) {
+        renderNotifications();
+      }
       updateNotifBadge();
-
-      // ✅ تعليم كل الإشعارات كمقروءة بعد 2 ثانية من فتح الشاشة
-      setTimeout(() => {
-        const readIds = getReadNotifications();
-        let updated = false;
-        allNotifications.forEach(n => {
-          if (!readIds.includes(n.id)) {
-            readIds.push(n.id);
-            updated = true;
-          }
-        });
-        if (updated) {
-          saveReadNotifications(readIds);
-          updateNotifBadge();
-        }
-      }, 2000);
     }, (err) => {
       console.warn('notifications load error:', err);
-      document.getElementById('notificationsList').innerHTML = '<p class="text-center text-gray-400 mt-10">تعذر تحميل الإشعارات. تحقق من اتصالك.</p>';
+      const isScreenOpen = document.getElementById('notificationsScreen').style.display === 'block';
+      if (isScreenOpen) {
+        document.getElementById('notificationsList').innerHTML = '<p class="text-center text-gray-400 mt-10">تعذر تحميل الإشعارات. تحقق من اتصالك.</p>';
+      }
     });
   }
 
