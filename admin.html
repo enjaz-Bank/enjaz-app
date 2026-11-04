@@ -120,6 +120,8 @@
     window.loadExtraFiles('training');
     window.loadExtraFiles('support');
     window.loadRecoveryCodes();
+    // ✅ تعيين حالة حقل فرع الرياضيات الافتراضية (مرئي لأن رياضيات هي الافتراضية)
+    setTimeout(() => { window.toggleMathBranch(); }, 100);
   }
 
   window.compressImage = function(file) {
@@ -274,15 +276,23 @@
       let isExternal = false;
       
       if (fileInput) {
+        // ✅ التحقق من نوع الملف
+        const validation = window.validateFileType(fileInput);
+        if (!validation.valid) {
+          alert("⚠️ " + validation.error);
+          if (btn) { btn.disabled = false; btn.innerText = "حفظ"; }
+          return;
+        }
         fileData = await readFileAsBase64(fileInput);
         isPdf = fileInput.type === 'application/pdf';
         if (fileData.length > 900000) {
-          alert("حجم الملف كبير جداً. الحد الأقصى ~700KB");
+          alert("⚠️ حجم الملف كبير جداً. الحد الأقصى ~700KB");
           if (btn) { btn.disabled = false; btn.innerText = "حفظ"; }
           return;
         }
       } else {
-        fileData = fileLink;
+        // ✅ معالجة روابط Google Drive تلقائياً
+        fileData = window.normalizeDriveLink(fileLink);
         isExternal = true;
       }
       
@@ -297,7 +307,7 @@
         createdAt: new Date()
       });
       
-      alert("تم حفظ الملف بنجاح ✅");
+      alert("✅ تم حفظ الملف بنجاح");
       
       if (nameEl) nameEl.value = '';
       if (inputEl) inputEl.value = '';
@@ -306,7 +316,11 @@
       if (premiumEl) premiumEl.checked = false;
       
     } catch(e) {
-      alert("خطأ: " + e.message);
+      console.error('تفاصيل الخطأ:', e);
+      let errorMsg = e.message || "حدث خطأ";
+      if(e.code === 'permission-denied') errorMsg = "لا تملك صلاحية. تأكد من تسجيل الدخول كمدير.";
+      else if(e.code === 'unavailable') errorMsg = "انقطع الاتصال بقاعدة البيانات. تحقق من الإنترنت.";
+      alert("❌ " + errorMsg);
     }
     if (btn) { btn.disabled = false; btn.innerText = "حفظ"; }
   };
@@ -1138,6 +1152,74 @@
     try { window.syncColorToHex('marqueeBgColor'); } catch(e) {}
   };
 
+  // ============ 🔧 دوال مساعدة لرفع الملفات ============
+  
+  // ✅ تحويل روابط Google Drive إلى preview
+  window.normalizeDriveLink = function(url) {
+    if (!url) return url;
+    url = url.trim();
+    // تحويل جميع صيغ Drive إلى preview
+    const patterns = [
+      { regex: /drive\.google\.com\/file\/d\/([^\/\?]+)/, group: 1 },
+      { regex: /drive\.google\.com\/open\?id=([^&]+)/, group: 1 },
+      { regex: /drive\.google\.com\/uc\?id=([^&]+)/, group: 1 },
+      { regex: /docs\.google\.com\/document\/d\/([^\/\?]+)/, group: 1 }
+    ];
+    for (const p of patterns) {
+      const match = url.match(p.regex);
+      if (match && match[p.group]) {
+        return `https://drive.google.com/file/d/${match[p.group]}/preview`;
+      }
+    }
+    return url;
+  };
+
+  // ✅ التحقق من نوع الملف المرفوع
+  window.validateFileType = function(file) {
+    if (!file) return { valid: false, error: "ملف غير موجود" };
+    const allowedTypes = ['text/html', 'application/pdf'];
+    const allowedExtensions = ['.html', '.htm', '.pdf'];
+    const fileName = (file.name || '').toLowerCase();
+    const hasValidType = allowedTypes.includes(file.type);
+    const hasValidExtension = allowedExtensions.some(ext => fileName.endsWith(ext));
+    if (!hasValidType && !hasValidExtension) {
+      return { valid: false, error: "نوع الملف غير مدعوم. الرجاء رفع ملف HTML أو PDF فقط." };
+    }
+    return { valid: true };
+  };
+
+  // ✅ تحديث شريط التقدم
+  window.updateUploadProgress = function(current, total, fileName = '') {
+    const progress = document.getElementById('uploadProgress');
+    const bar = document.getElementById('uploadProgressBar');
+    const text = document.getElementById('uploadProgressText');
+    if (!progress || !bar || !text) return;
+    progress.classList.remove('hidden');
+    const percent = Math.round((current / total) * 100);
+    bar.style.width = percent + '%';
+    if (fileName) {
+      text.innerText = `جاري رفع الملف ${current} من ${total}: ${fileName}`;
+    } else {
+      text.innerText = `جاري المعالجة... (${current}/${total})`;
+    }
+  };
+  window.hideUploadProgress = function() {
+    const progress = document.getElementById('uploadProgress');
+    if (progress) progress.classList.add('hidden');
+  };
+
+  // ✅ إظهار/إخفاء حقل فرع الرياضيات حسب المادة المختارة
+  window.toggleMathBranch = function() {
+    const subject = document.getElementById('subject').value;
+    const branchContainer = document.getElementById('mathBranchContainer');
+    if (!branchContainer) return;
+    if (subject === 'رياضيات') {
+      branchContainer.style.display = 'block';
+    } else {
+      branchContainer.style.display = 'none';
+    }
+  };
+
   function initFileInputs() {
     const container = document.getElementById('fileInputsContainer');
     if(!container) return;
@@ -1155,35 +1237,118 @@
   }
 
   window.adminAddLesson = async function() {
-    const btn = event.target;
-    btn.disabled = true; btn.innerText = "جاري الحفظ...";
+    const btn = document.querySelector('button[onclick="adminAddLesson()"]') || event?.target;
+    if (btn) { btn.disabled = true; btn.innerText = "جاري الحفظ..."; }
     const subject = document.getElementById('subject').value;
-    const title = document.getElementById('title').value;
-    if(!subject || !title) { alert("الرجاء اختيار المادة وكتابة العنوان!"); btn.disabled = false; btn.innerText = "حفظ الدرس"; return; }
-    try {
-      const lessonRef = await addDoc(collection(db, "lessons"), { subject, title, createdAt: new Date() });
-      for(let i=1; i<=4; i++) {
-        const fileInput = document.getElementById(`fileInput${i}`).files[0];
-        const linkInput = document.getElementById(`fileLink${i}`).value;
-        const isPremium = document.getElementById(`isPremium${i}`).checked;
-        const customName = document.getElementById(`fileName${i}`).value;
-        const price = document.getElementById(`filePrice${i}`).value; 
-        if(fileInput || linkInput) {
-          let fileData = "", isPdf = false, isExternal = false, fileName = "";
-          if(fileInput) {
-            fileName = customName || fileInput.name.replace(/\.[^/.]+$/, "");
-            fileData = await readFileAsBase64(fileInput);
-            isPdf = fileInput.type === 'application/pdf';
-            if(fileData.length > 900000) { alert(`حجم الملف ${i} كبير جداً.`); continue; }
-          } else {
-            fileName = customName || `ملف خارجي ${i}`;
-            fileData = linkInput;
-            isExternal = true;
-          }
-          await addDoc(collection(db, "files"), { lessonId: lessonRef.id, fileName, fileData, isPdf, isExternal, isPremium, price: price || "", createdAt: new Date() });
+    const title = document.getElementById('title').value.trim();
+    if(!subject || !title) { alert("الرجاء اختيار المادة وكتابة العنوان!"); if (btn) { btn.disabled = false; btn.innerText = "حفظ الدرس"; } return; }
+    
+    // ✅ التحقق المسبق من جميع الملفات قبل البدء
+    const filesToUpload = [];
+    for(let i=1; i<=4; i++) {
+      const fileInput = document.getElementById(`fileInput${i}`).files[0];
+      const linkInput = document.getElementById(`fileLink${i}`).value.trim();
+      const isPremium = document.getElementById(`isPremium${i}`).checked;
+      const customName = document.getElementById(`fileName${i}`).value.trim();
+      const price = document.getElementById(`filePrice${i}`).value;
+      
+      if(!fileInput && !linkInput) continue;
+      
+      // التحقق من سعر الملف المدفوع
+      if(isPremium && (!price || Number(price) <= 0)) {
+        alert(`⚠️ الملف رقم ${i} (${customName || 'بدون اسم'}): يجب إدخال سعر صحيح للملف المدفوع`);
+        if (btn) { btn.disabled = false; btn.innerText = "حفظ الدرس"; }
+        return;
+      }
+      
+      // التحقق من نوع الملف المرفوع
+      if(fileInput) {
+        const validation = window.validateFileType(fileInput);
+        if(!validation.valid) {
+          alert(`⚠️ الملف رقم ${i}: ${validation.error}`);
+          if (btn) { btn.disabled = false; btn.innerText = "حفظ الدرس"; }
+          return;
         }
       }
-      alert("تم حفظ الدرس بنجاح! 🎉");
+      
+      filesToUpload.push({ index: i, fileInput, linkInput, isPremium, customName, price });
+    }
+    
+    if(filesToUpload.length === 0) {
+      alert("⚠️ الرجاء إضافة ملف واحد على الأقل للدرس");
+      if (btn) { btn.disabled = false; btn.innerText = "حفظ الدرس"; }
+      return;
+    }
+    
+    try {
+      // 1. إنشاء وثيقة الدرس
+      // ✅ إضافة حقل branch لمادة الرياضيات فقط
+      const lessonData = { subject, title, createdAt: new Date() };
+      if (subject === 'رياضيات') {
+        const selectedBranch = document.querySelector('input[name="mathBranch"]:checked');
+        if (selectedBranch) {
+          lessonData.branch = selectedBranch.value; // 'algebra' أو 'geometry'
+        }
+      }
+      const lessonRef = await addDoc(collection(db, "lessons"), lessonData);
+      
+      // 2. رفع الملفات بالترتيب مع شريط التقدم
+      let uploadedCount = 0;
+      let failedFiles = [];
+      
+      for(const file of filesToUpload) {
+        uploadedCount++;
+        let fileData = "", isPdf = false, isExternal = false, fileName = "";
+        
+        try {
+          if(file.fileInput) {
+            fileName = file.customName || file.fileInput.name.replace(/\.[^/.]+$/, "");
+            window.updateUploadProgress(uploadedCount, filesToUpload.length, fileName);
+            fileData = await readFileAsBase64(file.fileInput);
+            isPdf = file.fileInput.type === 'application/pdf';
+            if(fileData.length > 900000) {
+              failedFiles.push({ name: fileName, error: "حجم الملف كبير جداً (الحد الأقصى ~700KB)" });
+              continue;
+            }
+          } else {
+            fileName = file.customName || `ملف خارجي ${file.index}`;
+            window.updateUploadProgress(uploadedCount, filesToUpload.length, fileName);
+            // ✅ معالجة روابط Google Drive تلقائياً
+            fileData = window.normalizeDriveLink(file.linkInput);
+            isExternal = true;
+          }
+          
+          await addDoc(collection(db, "files"), {
+            lessonId: lessonRef.id,
+            fileName,
+            fileData,
+            isPdf,
+            isExternal,
+            isPremium: file.isPremium,
+            price: file.isPremium ? file.price : "",
+            order: file.index,
+            createdAt: new Date()
+          });
+        } catch(fileError) {
+          console.error(`خطأ في رفع الملف ${file.index}:`, fileError);
+          failedFiles.push({ name: fileName, error: fileError.message });
+        }
+      }
+      
+      window.hideUploadProgress();
+      
+      // 3. تقرير النتائج
+      if(failedFiles.length > 0) {
+        const errorList = failedFiles.map(f => `• ${f.name}: ${f.error}`).join('
+');
+        alert(`⚠️ تم حفظ الدرس لكن فشل رفع ${failedFiles.length} ملف:
+
+${errorList}`);
+      } else {
+        alert(`✅ تم حفظ الدرس بنجاح مع ${filesToUpload.length} ملف! 🎉`);
+      }
+      
+      // 4. تنظيف الحقول
       document.getElementById('title').value = '';
       for(let i=1; i<=4; i++) {
         document.getElementById(`fileInput${i}`).value = '';
@@ -1194,8 +1359,20 @@
       }
       allFilesCache = [];
       loadAllFilesForExtraSelection();
-    } catch (error) { alert("حدث خطأ: " + error.message); }
-    btn.disabled = false; btn.innerText = "حفظ الدرس";
+    } catch (error) {
+      window.hideUploadProgress();
+      console.error('تفاصيل الخطأ:', error);
+      let errorMsg = "حدث خطأ غير متوقع";
+      if(error.code === 'permission-denied') {
+        errorMsg = "لا تملك صلاحية. تأكد من تسجيل الدخول كمدير.";
+      } else if(error.code === 'unavailable') {
+        errorMsg = "انقطع الاتصال بقاعدة البيانات. تحقق من الإنترنت.";
+      } else {
+        errorMsg = error.message || "حدث خطأ";
+      }
+      alert("❌ " + errorMsg);
+    }
+    if (btn) { btn.disabled = false; btn.innerText = "حفظ الدرس"; }
   };
 
   window.loadLessons = function() {
@@ -1206,7 +1383,17 @@
       const subjects = {};
       snapshot.forEach((docSnap) => {
         const lesson = { id: docSnap.id, ...docSnap.data() };
-        const sName = lesson.subject || "غير مصنف";
+        let sName = lesson.subject || "غير مصنف";
+        // ✅ فصل دروس الرياضيات حسب الفرع
+        if (sName === 'رياضيات') {
+          if (lesson.branch === 'algebra') {
+            sName = 'رياضيات - جبر';
+          } else if (lesson.branch === 'geometry') {
+            sName = 'رياضيات - هندسة';
+          } else {
+            sName = 'رياضيات - بدون فرع';  // الدروس القديمة
+          }
+        }
         if(!subjects[sName]) subjects[sName] = [];
         subjects[sName].push(lesson);
       });
@@ -1214,7 +1401,15 @@
       let subjectIndex = 0;
       Object.keys(subjects).forEach(subjectName => {
         const catId = `cat_${subjectIndex}`, arrowId = `arrow_${subjectIndex}`;
-        finalHTML += `<div class="mb-4 border border-gray-200 rounded-xl overflow-hidden"><div onclick="toggleCategory('${catId}', '${arrowId}')" class="bg-indigo-50 p-4 cursor-pointer flex justify-between items-center hover:bg-indigo-100"><h3 class="text-xl font-bold text-indigo-800">📚 ${subjectName} (${subjects[subjectName].length})</h3><span id="${arrowId}" class="text-2xl">⬇️</span></div><div id="${catId}" class="p-4 hidden bg-gray-50 grid grid-cols-1 gap-4">`;
+        // ✅ تمييز بصري لفروع الرياضيات
+        let bgClass = 'bg-indigo-50 hover:bg-indigo-100';
+        let textClass = 'text-indigo-800';
+        let iconHTML = '📚';
+        if (subjectName === 'رياضيات - جبر') { bgClass = 'bg-blue-50 hover:bg-blue-100'; textClass = 'text-blue-800'; iconHTML = '📘'; }
+        else if (subjectName === 'رياضيات - هندسة') { bgClass = 'bg-slate-100 hover:bg-slate-200'; textClass = 'text-slate-800'; iconHTML = '📏'; }
+        else if (subjectName === 'رياضيات - بدون فرع') { bgClass = 'bg-amber-50 hover:bg-amber-100'; textClass = 'text-amber-800'; iconHTML = '⚠️'; }
+        
+        finalHTML += `<div class="mb-4 border border-gray-200 rounded-xl overflow-hidden"><div onclick="toggleCategory('${catId}', '${arrowId}')" class="${bgClass} p-4 cursor-pointer flex justify-between items-center"><h3 class="text-xl font-bold ${textClass}">${iconHTML} ${subjectName} (${subjects[subjectName].length})</h3><span id="${arrowId}" class="text-2xl">⬇️</span></div><div id="${catId}" class="p-4 hidden bg-gray-50 grid grid-cols-1 gap-4">`;
         subjects[subjectName].forEach(lesson => {
           finalHTML += `<div class="bg-white p-4 rounded-xl shadow border flex justify-between items-center"><div><h4 class="font-bold text-lg">${lesson.title}</h4><div class="flex gap-2 mt-2"><button onclick="openFilesModal('${lesson.id}', '${lesson.title.replace(/'/g, "\\'")}')" class="bg-blue-600 text-white px-3 py-1 rounded text-xs">📁 إدارة الملفات</button><button onclick="deleteItem('lessons','${lesson.id}')" class="bg-red-600 text-white px-3 py-1 rounded text-xs">حذف</button></div></div></div>`;
         });
@@ -1255,7 +1450,13 @@
       
       let filesArr = [];
       snap.forEach(d => filesArr.push({ id: d.id, ...d.data() }));
-      filesArr.sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
+      // ✅ ترتيب ذكي: حسب order إذا وُجد، وإلا حسب createdAt
+      filesArr.sort((a, b) => {
+        const aOrder = (typeof a.order === 'number') ? a.order : 999;
+        const bOrder = (typeof b.order === 'number') ? b.order : 999;
+        if (aOrder !== bOrder) return aOrder - bOrder;
+        return (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0);
+      });
 
       filesArr.forEach((d, index) => {
         const f = d;
@@ -1277,30 +1478,73 @@
   };
 
   window.addNewFileToLesson = async function() {
-    const btn = event.target;
-    btn.disabled = true; btn.innerText = "جاري الإضافة...";
-    const fName = document.getElementById('newFileName').value;
+    const btn = document.querySelector('button[onclick="addNewFileToLesson()"]') || event?.target;
+    if (btn) { btn.disabled = true; btn.innerText = "جاري الإضافة..."; }
+    const fName = document.getElementById('newFileName').value.trim();
     const fInput = document.getElementById('newFileInput').files[0];
-    const fLink = document.getElementById('newFileLink').value;
+    const fLink = document.getElementById('newFileLink').value.trim();
     const fPrice = document.getElementById('newFilePrice').value;
     const fIsPremium = document.getElementById('newFileIsPremium').checked;
 
-    if(!fInput && !fLink) { alert("الرجاء اختيار ملف أو إدخال رابط"); btn.disabled = false; btn.innerText = "إضافة الملف"; return; }
+    if(!fInput && !fLink) { alert("الرجاء اختيار ملف أو إدخال رابط"); if (btn) { btn.disabled = false; btn.innerText = "إضافة الملف"; } return; }
+    
+    // ✅ التحقق من سعر الملف المدفوع
+    if(fIsPremium && (!fPrice || Number(fPrice) <= 0)) {
+      alert("⚠️ يجب إدخال سعر صحيح للملف المدفوع");
+      if (btn) { btn.disabled = false; btn.innerText = "إضافة الملف"; }
+      return;
+    }
+    
+    // ✅ التحقق من نوع الملف المرفوع
+    if(fInput) {
+      const validation = window.validateFileType(fInput);
+      if(!validation.valid) {
+        alert("⚠️ " + validation.error);
+        if (btn) { btn.disabled = false; btn.innerText = "إضافة الملف"; }
+        return;
+      }
+    }
     
     let fileData = "", isPdf = false, isExternal = false, fileName = fName;
     try {
       if(fInput) {
         if(!fileName) fileName = fInput.name.replace(/\.[^/.]+$/, "");
+        window.updateUploadProgress(1, 1, fileName);
         fileData = await readFileAsBase64(fInput);
         isPdf = fInput.type === 'application/pdf';
-        if(fileData.length > 900000) { alert(`حجم الملف كبير جداً.`); btn.disabled = false; btn.innerText = "إضافة الملف"; return; }
+        if(fileData.length > 900000) {
+          window.hideUploadProgress();
+          alert("⚠️ حجم الملف كبير جداً. الحد الأقصى ~700KB");
+          if (btn) { btn.disabled = false; btn.innerText = "إضافة الملف"; }
+          return;
+        }
       } else {
         if(!fileName) fileName = "ملف خارجي";
-        fileData = fLink;
+        window.updateUploadProgress(1, 1, fileName);
+        // ✅ معالجة روابط Google Drive تلقائياً
+        fileData = window.normalizeDriveLink(fLink);
         isExternal = true;
       }
-      await addDoc(collection(db, "files"), { lessonId: currentLessonId, fileName, fileData, isPdf, isExternal, isPremium: fIsPremium, price: fPrice || "", createdAt: new Date() });
-      alert("تمت إضافة الملف ✅");
+      
+      // ✅ الحصول على عدد الملفات الحالية لتحديد الترتيب
+      const existingFilesQuery = query(collection(db, "files"), where("lessonId", "==", currentLessonId));
+      const existingSnap = await getDocs(existingFilesQuery);
+      const newOrder = existingSnap.size + 1;
+      
+      await addDoc(collection(db, "files"), {
+        lessonId: currentLessonId,
+        fileName,
+        fileData,
+        isPdf,
+        isExternal,
+        isPremium: fIsPremium,
+        price: fIsPremium ? fPrice : "",
+        order: newOrder,
+        createdAt: new Date()
+      });
+      
+      window.hideUploadProgress();
+      alert("✅ تمت إضافة الملف بنجاح");
       document.getElementById('newFileName').value = '';
       document.getElementById('newFileInput').value = '';
       document.getElementById('newFileLink').value = '';
@@ -1308,8 +1552,15 @@
       document.getElementById('newFileIsPremium').checked = false;
       allFilesCache = [];
       loadAllFilesForExtraSelection();
-    } catch(e) { alert("خطأ: " + e.message); }
-    btn.disabled = false; btn.innerText = "إضافة الملف";
+    } catch(e) {
+      window.hideUploadProgress();
+      console.error('تفاصيل الخطأ:', e);
+      let errorMsg = e.message || "حدث خطأ";
+      if(e.code === 'permission-denied') errorMsg = "لا تملك صلاحية. تأكد من تسجيل الدخول كمدير.";
+      else if(e.code === 'unavailable') errorMsg = "انقطع الاتصال بقاعدة البيانات. تحقق من الإنترنت.";
+      alert("❌ " + errorMsg);
+    }
+    if (btn) { btn.disabled = false; btn.innerText = "إضافة الملف"; }
   };
 
   window.toggleFilePremium = async function(id, newState) { await updateDoc(doc(db, "files", id), { isPremium: newState }); };
@@ -1348,24 +1599,34 @@
   };
 
   window.adminAddExam = async function() {
-    const btn = event.target;
-    btn.disabled = true; btn.innerText = "جاري الرفع...";
-    const title = document.getElementById('examTitle').value;
+    const btn = document.querySelector('button[onclick="adminAddExam()"]') || event?.target;
+    if (btn) { btn.disabled = true; btn.innerText = "جاري الرفع..."; }
+    const title = document.getElementById('examTitle').value.trim();
     const file = document.getElementById('examFile').files[0];
-    const link = document.getElementById('examLink').value;
-    if(!title || (!file && !link)) { alert("الرجاء إدخال اسم وإضافة ملف أو رابط!"); btn.disabled = false; btn.innerText = "رفع"; return; }
+    const link = document.getElementById('examLink').value.trim();
+    if(!title || (!file && !link)) { alert("⚠️ الرجاء إدخال اسم وإضافة ملف أو رابط!"); if (btn) { btn.disabled = false; btn.innerText = "رفع"; } return; }
     try {
       let fileUrl = link, fileType = "رابط خارجي";
       if(file) {
+        // ✅ التحقق من نوع الملف (يقبل جميع الأنواع للاختبارات)
         fileUrl = await readFileAsBase64(file);
-        fileType = file.type;
-        if(fileUrl.length > 900000) { alert("حجم الملف كبير جداً."); btn.disabled = false; btn.innerText = "رفع"; return; }
+        fileType = file.type || 'غير معروف';
+        if(fileUrl.length > 900000) { alert("⚠️ حجم الملف كبير جداً. الحد الأقصى ~700KB"); if (btn) { btn.disabled = false; btn.innerText = "رفع"; } return; }
+      } else {
+        // ✅ معالجة روابط Google Drive تلقائياً
+        fileUrl = window.normalizeDriveLink(link);
       }
       await addDoc(collection(db, "exams"), { title, fileUrl, fileType, isPremium: false, createdAt: new Date() });
-      alert("تم الرفع! 🎉");
+      alert("✅ تم الرفع بنجاح! 🎉");
       document.getElementById('examTitle').value=''; document.getElementById('examFile').value=''; document.getElementById('examLink').value='';
-    } catch(e) { alert("خطأ: " + e.message); }
-    btn.disabled = false; btn.innerText = "رفع";
+    } catch(e) {
+      console.error('تفاصيل الخطأ:', e);
+      let errorMsg = e.message || "حدث خطأ";
+      if(e.code === 'permission-denied') errorMsg = "لا تملك صلاحية. تأكد من تسجيل الدخول كمدير.";
+      else if(e.code === 'unavailable') errorMsg = "انقطع الاتصال بقاعدة البيانات. تحقق من الإنترنت.";
+      alert("❌ " + errorMsg);
+    }
+    if (btn) { btn.disabled = false; btn.innerText = "رفع"; }
   };
   
   window.loadExams = function() {
@@ -1389,6 +1650,10 @@
         try {
           const q = query(collection(db, "files"), where("lessonId", "==", id));
           const snap = await getDocs(q);
+          // ✅ تأكيد حذف الملفات المرتبطة
+          if (snap.size > 0) {
+            if(!confirm(`⚠️ سيتم أيضاً حذف ${snap.size} ملف مرتبط بهذا الدرس.\nهل تريد المتابعة؟`)) return;
+          }
           const deletePromises = [];
           snap.forEach(d => deletePromises.push(deleteDoc(doc(db, "files", d.id))));
           await Promise.all(deletePromises);
@@ -1397,6 +1662,8 @@
         }
       }
       await deleteDoc(doc(db, collectionName, id));
+      // ✅ رسالة نجاح
+      alert("✅ تم الحذف بنجاح");
     } catch(e) {
       alert("خطأ في الحذف: " + e.message);
     }
@@ -2268,15 +2535,37 @@
         <h2 class="text-xl font-bold text-indigo-900 mb-4">➕ إضافة درس جديد</h2>
         <div class="space-y-4">
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <select id="subject" class="w-full p-2 border rounded-lg">
+            <select id="subject" class="w-full p-2 border rounded-lg" onchange="toggleMathBranch()">
               <option>رياضيات</option><option>الفيزياء</option><option>الكيمياء</option><option>العلوم</option>
               <option>اللغة العربية</option><option>اللغة الانكليزية</option><option>اللغةالفرنسية</option><option>التربية الاسلامية</option>
             </select>
             <input id="title" type="text" class="w-full p-2 border rounded-lg" placeholder="عنوان الدرس">
           </div>
+          <!-- ✅ حقل فرع الرياضيات (يظهر فقط عند اختيار رياضيات) -->
+          <div id="mathBranchContainer" class="bg-blue-50 p-3 rounded-lg border border-blue-200">
+            <label class="text-sm font-bold block mb-2 text-blue-800">📐 فرع الرياضيات:</label>
+            <div class="flex gap-2">
+              <label class="flex items-center gap-2 bg-white px-3 py-2 rounded-lg border cursor-pointer hover:bg-blue-100">
+                <input type="radio" id="branchAlgebra" name="mathBranch" value="algebra" checked class="w-4 h-4">
+                <span class="font-bold text-sm">📘 الجبر</span>
+              </label>
+              <label class="flex items-center gap-2 bg-white px-3 py-2 rounded-lg border cursor-pointer hover:bg-slate-100">
+                <input type="radio" id="branchGeometry" name="mathBranch" value="geometry" class="w-4 h-4">
+                <span class="font-bold text-sm">📏 الهندسة</span>
+              </label>
+            </div>
+          </div>
           <div class="space-y-3 bg-gray-50 p-4 rounded-lg border">
             <h3 class="font-bold text-indigo-800">ملحقات الدرس (4 ملفات كحد أقصى)</h3>
             <div id="fileInputsContainer"></div>
+            
+            <!-- ✅ شريط تقدم الرفع -->
+            <div id="uploadProgress" class="hidden mt-3">
+              <div class="bg-gray-200 rounded-full h-2.5 overflow-hidden">
+                <div id="uploadProgressBar" class="bg-gradient-to-r from-indigo-500 to-indigo-700 h-full transition-all duration-300" style="width: 0%"></div>
+              </div>
+              <p id="uploadProgressText" class="text-xs text-center mt-2 text-gray-600 font-bold">جاري رفع الملف...</p>
+            </div>
           </div>
           <button onclick="adminAddLesson()" class="w-full bg-green-600 text-white p-3 rounded-lg font-bold">حفظ الدرس</button>
         </div>
