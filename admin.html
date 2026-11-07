@@ -30,8 +30,8 @@
   let currentCodeType = 'package';
   const allSubjects = ["رياضيات", "الفيزياء", "الكيمياء", "العلوم", "اللغة العربية", "اللغة الانكليزية", "اللغةالفرنسية", "التربية الاسلامية"];
 
-  let allFilesCache = [];
-  let currentEditingPkg = null;
+  let allFilesCache = { lessons: [], training: [], support: [] };
+  let currentExtraFilesTab = 'lessons';
   let selectedExtraFiles = new Set();
   let savedExtraFiles = { pkg1: [], pkg2: [], pkg3: [] };
   let currentEditingExtraFile = null; 
@@ -539,64 +539,111 @@
     }
   };
 
+  let currentEditingPkg = null;
+
   async function loadAllFilesForExtraSelection() {
     try {
-      const [filesSnap, lessonsSnap] = await Promise.all([
+      const [filesSnap, lessonsSnap, extraFilesSnap] = await Promise.all([
         getDocs(collection(db, "files")),
-        getDocs(collection(db, "lessons"))
+        getDocs(collection(db, "lessons")),
+        getDocs(collection(db, "extraFiles"))
       ]);
+      
       const lessonsMap = {};
       lessonsSnap.forEach(d => { lessonsMap[d.id] = d.data(); });
       
-      allFilesCache = [];
+      allFilesCache = { lessons: [], training: [], support: [] };
+      
       filesSnap.forEach(d => {
         const f = d.data();
         const lesson = lessonsMap[f.lessonId] || {};
-        allFilesCache.push({
+        allFilesCache.lessons.push({
           id: d.id,
+          type: 'lesson',
           fileName: f.fileName || 'بدون اسم',
           isPremium: f.isPremium === true,
-          price: f.price || '',
-          lessonTitle: lesson.title || '',
-          subject: lesson.subject || ''
+          subject: lesson.subject || 'غير مصنف',
+          lessonTitle: lesson.title || ''
         });
       });
-      allFilesCache.sort((a, b) => (a.subject || '').localeCompare(b.subject || '') || a.fileName.localeCompare(b.fileName));
+      
+      extraFilesSnap.forEach(d => {
+        const f = d.data();
+        const item = {
+          id: d.id,
+          type: f.category,
+          fileName: f.fileName || 'بدون اسم',
+          isPremium: f.isPremium === true,
+          subject: f.subject || 'عام',
+          lessonTitle: ''
+        };
+        if (f.category === 'training') allFilesCache.training.push(item);
+        else if (f.category === 'support') allFilesCache.support.push(item);
+      });
+      
     } catch(e) { console.warn('loadAllFiles error:', e); }
   }
 
   window.openExtraFilesModal = async function(pkgId) {
     currentEditingPkg = pkgId;
-    if (allFilesCache.length === 0) await loadAllFilesForExtraSelection();
+    if (allFilesCache.lessons.length === 0 && allFilesCache.training.length === 0 && allFilesCache.support.length === 0) {
+      await loadAllFilesForExtraSelection();
+    }
     
     const current = savedExtraFiles[pkgId] || [];
     selectedExtraFiles = new Set(current);
     
-    const subjectSet = new Set();
-    allFilesCache.forEach(f => { if (f.subject) subjectSet.add(f.subject); });
-    const filter = document.getElementById('extraFilesSubjectFilter');
-    filter.innerHTML = '<option value="">كل المواد</option>' + 
-      Array.from(subjectSet).sort().map(s => `<option value="${s}">${s}</option>`).join('');
-    
     document.getElementById('extraFilesSearch').value = '';
-    filterExtraFiles();
+    showExtraFilesTab('lessons');
+    
     document.getElementById('extraFilesModal').classList.remove('hidden');
     document.getElementById('extraFilesModal').classList.add('flex');
   };
 
+  window.showExtraFilesTab = function(tabName) {
+    currentExtraFilesTab = tabName;
+    
+    document.getElementById('tab-btn-lessons').className = tabName === 'lessons' ? 'flex-1 p-2 rounded-lg font-bold text-sm bg-indigo-600 text-white' : 'flex-1 p-2 rounded-lg font-bold text-sm bg-white text-indigo-900 hover:bg-indigo-50 border';
+    document.getElementById('tab-btn-training').className = tabName === 'training' ? 'flex-1 p-2 rounded-lg font-bold text-sm bg-indigo-600 text-white' : 'flex-1 p-2 rounded-lg font-bold text-sm bg-white text-indigo-900 hover:bg-indigo-50 border';
+    document.getElementById('tab-btn-support').className = tabName === 'support' ? 'flex-1 p-2 rounded-lg font-bold text-sm bg-indigo-600 text-white' : 'flex-1 p-2 rounded-lg font-bold text-sm bg-white text-indigo-900 hover:bg-indigo-50 border';
+    
+    // تحديث قائمة المواد للإضافة السريعة
+    const subjects = new Set();
+    (allFilesCache[currentExtraFilesTab] || []).forEach(f => { if(f.subject) subjects.add(f.subject); });
+    document.getElementById('quickAddSubject').innerHTML = '<option value="">اختر المادة...</option>' + 
+      Array.from(subjects).sort().map(s => `<option value="${s}">${s}</option>`).join('');
+      
+    filterExtraFiles();
+  };
+
+  window.quickAddSubject = function() {
+    const subj = document.getElementById('quickAddSubject').value;
+    if (!subj) { alert("الرجاء اختيار مادة أولاً"); return; }
+    
+    let addedCount = 0;
+    (allFilesCache[currentExtraFilesTab] || []).forEach(f => {
+      if (f.subject === subj && !selectedExtraFiles.has(f.id)) {
+        selectedExtraFiles.add(f.id);
+        addedCount++;
+      }
+    });
+    filterExtraFiles();
+    updateExtraFilesCount();
+    if (addedCount > 0) alert(`✅ تم إضافة ${addedCount} ملف من مادة ${subj}`);
+  };
+
   window.filterExtraFiles = function() {
     const search = document.getElementById('extraFilesSearch').value.toLowerCase().trim();
-    const subject = document.getElementById('extraFilesSubjectFilter').value;
     const list = document.getElementById('extraFilesList');
     
-    const filtered = allFilesCache.filter(f => {
+    const items = allFilesCache[currentExtraFilesTab] || [];
+    const filtered = items.filter(f => {
       if (search && !f.fileName.toLowerCase().includes(search) && !f.lessonTitle.toLowerCase().includes(search)) return false;
-      if (subject && f.subject !== subject) return false;
       return true;
     });
     
     if (filtered.length === 0) {
-      list.innerHTML = '<p class="text-center text-gray-400 p-6 text-sm">لا توجد ملفات مطابقة</p>';
+      list.innerHTML = '<p class="text-center text-gray-400 p-6 text-sm">لا توجد ملفات في هذا القسم</p>';
       return;
     }
     
@@ -617,8 +664,6 @@
         </div>
       </label>`;
     }).join('');
-    
-    updateExtraFilesCount();
   };
 
   window.toggleExtraFile = function(id, checked) {
@@ -2240,21 +2285,35 @@
   <div id="extraFilesModal" class="fixed inset-0 bg-black/60 hidden justify-center items-center z-[80] p-4 backdrop-blur-sm">
     <div class="bg-white rounded-xl p-4 w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl">
       <div class="flex justify-between items-center mb-3 border-b pb-3">
-        <h3 class="font-bold text-lg text-indigo-900">🎁 اختيار ملفات إضافية للباقة</h3>
+        <h3 class="font-bold text-lg text-indigo-900">🎁 تحديد محتوى الباقة الإضافي</h3>
         <button onclick="closeExtraFilesModal()" class="text-gray-500 hover:text-gray-800 text-2xl leading-none">×</button>
       </div>
-      <div class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2 mb-3">
-        💡 الملفات من المواد المُختارة أعلاه تُفتح تلقائياً. هنا اختر ملفات إضافية محددة من أي مادة.
-      </div>
+      
+      <!-- تبويبات الأقسام -->
       <div class="flex gap-2 mb-3">
-        <input id="extraFilesSearch" type="text" placeholder="🔍 ابحث باسم الملف أو الدرس..." class="flex-1 p-2 border rounded-lg text-sm" oninput="filterExtraFiles()">
-        <select id="extraFilesSubjectFilter" class="p-2 border rounded-lg text-sm" onchange="filterExtraFiles()">
-          <option value="">كل المواد</option>
-        </select>
+        <button onclick="showExtraFilesTab('lessons')" id="tab-btn-lessons" class="flex-1 p-2 rounded-lg font-bold text-sm bg-indigo-600 text-white">📚 دروس المواد</button>
+        <button onclick="showExtraFilesTab('training')" id="tab-btn-training" class="flex-1 p-2 rounded-lg font-bold text-sm bg-white text-indigo-900 hover:bg-indigo-50 border">📄 نماذج امتحانية</button>
+        <button onclick="showExtraFilesTab('support')" id="tab-btn-support" class="flex-1 p-2 rounded-lg font-bold text-sm bg-white text-indigo-900 hover:bg-indigo-50 border">📖 ملفات الدعم</button>
       </div>
+      
+      <!-- إضافة سريعة لمادة كاملة -->
+      <div class="bg-blue-50 p-2 rounded-lg border border-blue-200 mb-3 flex gap-2 items-center">
+        <span class="text-xs font-bold text-blue-800 whitespace-nowrap">⚡ إضافة مادة كاملة:</span>
+        <select id="quickAddSubject" class="flex-1 p-1.5 border rounded text-sm">
+          <option value="">اختر المادة...</option>
+        </select>
+        <button onclick="quickAddSubject()" class="bg-blue-600 text-white px-3 py-1.5 rounded text-xs font-bold whitespace-nowrap">+ إضافة الكل</button>
+      </div>
+      
+      <!-- بحث -->
+      <div class="flex gap-2 mb-3">
+        <input id="extraFilesSearch" type="text" placeholder="🔍 ابحث باسم الملف..." class="flex-1 p-2 border rounded-lg text-sm" oninput="filterExtraFiles()">
+      </div>
+      
       <div id="extraFilesList" class="flex-1 overflow-y-auto border rounded-lg p-2 bg-gray-50 min-h-[200px] max-h-[400px]"></div>
+      
       <div class="flex justify-between items-center mt-3 pt-3 border-t">
-        <div class="text-sm">تم اختيار: <span id="extraFilesCount" class="font-bold text-indigo-600 text-lg">0</span> ملف</div>
+        <div class="text-sm">تم اختيار: <span id="extraFilesCount" class="font-bold text-indigo-600 text-lg">0</span> عنصر</div>
         <div class="flex gap-2">
           <button onclick="closeExtraFilesModal()" class="bg-gray-200 hover:bg-gray-300 px-4 py-2 rounded-lg font-bold">إلغاء</button>
           <button onclick="saveExtraFilesSelection()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg font-bold">حفظ</button>
