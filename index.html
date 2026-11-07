@@ -1612,6 +1612,23 @@
       const docSnap = await getDoc(doc(db, "settings", "packages"));
       if(docSnap.exists()) {
         const data = docSnap.data();
+        
+        // ✅ جلب تفاصيل كل extraFiles لعرض أسمائها في البطاقات
+        let allExtraIds = [];
+        for(let i=1; i<=3; i++) {
+          const pkg = data[`pkg${i}`];
+          if (pkg && Array.isArray(pkg.extraFiles)) {
+            allExtraIds = allExtraIds.concat(pkg.extraFiles);
+          }
+        }
+        
+        // جلب تفاصيل الملفات من both collections (files + extraFiles)
+        let extraFilesDetails = {};
+        if (allExtraIds.length > 0) {
+          const details = await fetchFilesFromAnyCollection(allExtraIds);
+          details.forEach(f => { extraFilesDetails[f.id] = f; });
+        }
+        
         let html = `<div class="flex flex-col gap-6 mt-4">`;
         for(let i=1; i<=3; i++) {
           const pkg = data[`pkg${i}`];
@@ -1625,8 +1642,70 @@
             
             let subsHtml = '';
             if (!isFull) {
-             const sp = Array.isArray(pkg.subjects) && pkg.subjects.length ? `<div class="text-sm font-bold text-gray-700 dark:text-gray-300 mb-1">📚 ${pkg.subjects.join(' • ')}</div>` : '';
-              const ep = Array.isArray(pkg.extraFiles) && pkg.extraFiles.length ? `<div class="text-xs text-amber-600 dark:text-amber-400 mb-2">🎁 يتضمن ${pkg.extraFiles.length} ملف إضافي</div>` : '';
+              // عرض المواد
+              const sp = Array.isArray(pkg.subjects) && pkg.subjects.length ? `<div class="text-sm font-bold text-gray-700 dark:text-gray-300 mb-1">📚 ${pkg.subjects.join(' • ')}</div>` : '';
+              
+              // ✅ عرض تفصيلي ذكي للملفات الإضافية
+              let ep = '';
+              if (Array.isArray(pkg.extraFiles) && pkg.extraFiles.length > 0) {
+                // تصنيف الملفات
+                const lessons = [];
+                const trainingBySubject = {};  // { "رياضيات": [file1, file2], "علوم": [file3] }
+                const supportBySubject = {};
+                
+                pkg.extraFiles.forEach(fid => {
+                  const f = extraFilesDetails[fid];
+                  if (!f) return;
+                  
+                  // تحديد النوع: إذا كان له lessonId → درس، إذا كان category → نماذج/دعم
+                  if (f.lessonId || (!f.category && !f.isExternal && f.fileData)) {
+                    // ملف درس فردي
+                    lessons.push(f.fileName || 'ملف');
+                  } else if (f.category === 'training') {
+                    const subj = f.subject || 'عام';
+                    if (!trainingBySubject[subj]) trainingBySubject[subj] = [];
+                    trainingBySubject[subj].push(f.fileName || 'ملف');
+                  } else if (f.category === 'support') {
+                    const subj = f.subject || 'عام';
+                    if (!supportBySubject[subj]) supportBySubject[subj] = [];
+                    supportBySubject[subj].push(f.fileName || 'ملف');
+                  } else {
+                    // ملف قديم بدون تصنيف
+                    lessons.push(f.fileName || 'ملف');
+                  }
+                });
+                
+                let extraParts = [];
+                
+                // عرض الملفات الفردية بأسمائها
+                if (lessons.length > 0) {
+                  extraParts.push(`<div class="text-[11px] text-gray-600 dark:text-gray-400 mt-1">📂 ${lessons.map(n => `<span class="font-bold">${n}</span>`).join('، ')}</div>`);
+                }
+                
+                // عرض نماذج امتحانية مجمعة حسب المادة
+                const trainingSubjects = Object.keys(trainingBySubject);
+                if (trainingSubjects.length > 0) {
+                  const trainingHtml = trainingSubjects.map(subj => 
+                    `${subj} (${trainingBySubject[subj].length})`
+                  ).join('، ');
+                  extraParts.push(`<div class="text-[11px] text-amber-700 dark:text-amber-400 mt-1">📄 نماذج امتحانية: ${trainingHtml}</div>`);
+                }
+                
+                // عرض ملفات دعم مجمعة حسب المادة
+                const supportSubjects = Object.keys(supportBySubject);
+                if (supportSubjects.length > 0) {
+                  const supportHtml = supportSubjects.map(subj => 
+                    `${subj} (${supportBySubject[subj].length})`
+                  ).join('، ');
+                  extraParts.push(`<div class="text-[11px] text-emerald-700 dark:text-emerald-400 mt-1">📖 ملفات دعم: ${supportHtml}</div>`);
+                }
+                
+                ep = `<div class="bg-amber-50 dark:bg-amber-900/20 rounded-xl p-2 mt-2 mb-2 border border-amber-200 dark:border-amber-700">
+                  <div class="text-xs font-bold text-amber-600 dark:text-amber-400 mb-1">🎁 محتوى إضافي (${pkg.extraFiles.length}):</div>
+                  ${extraParts.join('')}
+                </div>`;
+              }
+              
               subsHtml = sp + ep;
             }
             
