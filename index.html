@@ -2,7 +2,7 @@
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">  
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes"> 
 <title>منصة إنجاز الأكاديمية</title>
 <!-- ✅ PWA Setup -->
 <meta name="theme-color" content="#4f46e5">
@@ -426,6 +426,10 @@
       case 'mathBranch':
         // ✅ العودة من فرع الرياضيات إلى صندوقي الجبر/الهندسة
         window.showMathBranches();
+        break;
+      case 'englishBranch':
+        // ✅ العودة من فرع الانكليزي إلى صندوقي القواعد/الأدب
+        window.showEnglishBranches();
         break;
       case 'singleBuyModal':
         document.getElementById('singleBuyModal').classList.add('hidden');
@@ -1928,6 +1932,13 @@
       return;
     }
 
+    // ✅ حالة خاصة: اللغة الانكليزية → عرض صندوقين (قواعد/أدب)
+    if (normalizeSubject(subjectName) === normalizeSubject('اللغة الانكليزية')) {
+      window.showEnglishBranches();
+      if(!skipPush) pushScreen('subjectList', { subject: subjectName });
+      return;
+    }
+
     document.getElementById('listTitle').innerText = subjectName;
     const container = document.getElementById('lessonsList');
     const filteredLessons = lessonsData.filter(l => normalizeSubject(l.subject) === normalizeSubject(subjectName));
@@ -2006,6 +2017,77 @@
     }
     currentView = "list";
     if(!skipPush) pushScreen('mathBranch', { branch });
+  };
+
+  // ============ ✅ فروع اللغة الانكليزية (قواعد / أدب) ============
+
+  // ✅ عرض صناديق فروع اللغة الانكليزية
+  window.showEnglishBranches = function() {
+    const englishLessons = lessonsData.filter(l => normalizeSubject(l.subject) === normalizeSubject('اللغة الانكليزية'));
+    // الدروس التي لها فرع محدد + الدروس القديمة بدون فرع (تُحسب لكلا الفرعين)
+    const grammarLessons = englishLessons.filter(l => !l.branch || l.branch === 'grammar');
+    const literatureLessons = englishLessons.filter(l => !l.branch || l.branch === 'literature');
+
+    const container = document.getElementById('lessonsList');
+    container.innerHTML = `
+      <div class="mb-4">
+        <h2 class="text-md font-bold text-gray-800 dark:text-gray-200 mb-3 flex items-center gap-2">
+          <i class="fas fa-language text-amber-500"></i>
+          اختر فرع اللغة الانكليزية
+        </h2>
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <!-- صندوق القواعد -->
+        <div onclick="openEnglishBranch('grammar')" style="background: linear-gradient(135deg, #f59e0b 0%, #b45309 100%);" class="card-hover p-4 rounded-3xl shadow-lg cursor-pointer active:scale-95 transition-transform duration-150 h-40 flex flex-col justify-between text-white relative overflow-hidden" role="button" tabindex="0" aria-label="القواعد">
+          <div class="absolute top-0 left-0 w-24 h-24 bg-white/10 rounded-full -mt-10 -ml-10"></div>
+          <div class="flex justify-between items-start relative z-10">
+            <i class="fas fa-spell-check text-3xl opacity-90" aria-hidden="true"></i>
+            <span class="bg-white/25 backdrop-blur-sm px-2 py-1 rounded-full text-xs font-bold">${grammarLessons.length} درس</span>
+          </div>
+          <h3 class="text-lg font-extrabold leading-tight relative z-10">القواعد</h3>
+        </div>
+        <!-- صندوق الأدب -->
+        <div onclick="openEnglishBranch('literature')" style="background: linear-gradient(135deg, #d97706 0%, #92400e 100%);" class="card-hover p-4 rounded-3xl shadow-lg cursor-pointer active:scale-95 transition-transform duration-150 h-40 flex flex-col justify-between text-white relative overflow-hidden" role="button" tabindex="0" aria-label="الأدب">
+          <div class="absolute top-0 left-0 w-24 h-24 bg-white/10 rounded-full -mt-10 -ml-10"></div>
+          <div class="flex justify-between items-start relative z-10">
+            <i class="fas fa-book-open text-3xl opacity-90" aria-hidden="true"></i>
+            <span class="bg-white/25 backdrop-blur-sm px-2 py-1 rounded-full text-xs font-bold">${literatureLessons.length} درس</span>
+          </div>
+          <h3 class="text-lg font-extrabold leading-tight relative z-10">الأدب والنصوص</h3>
+        </div>
+      </div>
+    `;
+    document.getElementById('listTitle').innerText = 'اللغة الانكليزية';
+    document.getElementById('gridView').style.display = 'none';
+    document.getElementById('listView').style.display = 'block';
+    currentView = "list";
+  };
+
+  // ✅ فتح دروس فرع اللغة الانكليزية (قواعد أو أدب)
+  window.openEnglishBranch = function(branch, skipPush = false) {
+    if (typeof skipPush !== 'boolean') skipPush = false;
+    playClickSound();
+
+    const branchName = branch === 'grammar' ? 'القواعد' : 'الأدب والنصوص';
+    document.getElementById('listTitle').innerText = 'اللغة الانكليزية - ' + branchName;
+
+    const container = document.getElementById('lessonsList');
+    // الدروس القديمة بدون فرع تظهر في كلا الفرعين
+    const filteredLessons = lessonsData.filter(l => {
+      if (normalizeSubject(l.subject) !== normalizeSubject('اللغة الانكليزية')) return false;
+      if (!l.branch) return true;  // الدروس القديمة
+      return l.branch === branch;
+    });
+
+    if (filteredLessons.length === 0) {
+      container.innerHTML = `<div class="text-center mt-20 text-gray-400"><i class="far fa-folder-open text-5xl mb-4 block"></i><p>لا توجد دروس في ${branchName}.</p></div>`;
+    } else {
+      let listHTML = "";
+      filteredLessons.forEach(lesson => listHTML += renderLessonCard(lesson));
+      container.innerHTML = listHTML;
+    }
+    currentView = "list";
+    if(!skipPush) pushScreen('englishBranch', { branch });
   };
 
   window.renderBookmarks = function() {
@@ -2204,58 +2286,172 @@
     } catch(e) { alert("تعذر فتح نافذة الطباعة."); overlay.classList.add('hidden'); overlay.classList.remove('flex'); }
   };
 
+  // ✅ المواد المتاحة للنماذج/الدعم (نفس المواد الأساسية)
+  const extraSubjectsList = [
+    { name: "رياضيات", gradient: "linear-gradient(135deg, #a855f7 0%, #7e22ce 100%)", icon: "fa-square-root-variable" },
+    { name: "الفيزياء", gradient: "linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)", icon: "fa-atom" },
+    { name: "الكيمياء", gradient: "linear-gradient(135deg, #06b6d4 0%, #0e7490 100%)", icon: "fa-flask" },
+    { name: "العلوم", gradient: "linear-gradient(135deg, #22c55e 0%, #15803d 100%)", icon: "fa-dna" },
+    { name: "اللغة العربية", gradient: "linear-gradient(135deg, #ef4444 0%, #b91c1c 100%)", icon: "fa-book-open" },
+    { name: "اللغة الانكليزية", gradient: "linear-gradient(135deg, #f59e0b 0%, #b45309 100%)", icon: "fa-language" },
+    { name: "اللغةالفرنسية", gradient: "linear-gradient(135deg, #ec4899 0%, #be185d 100%)", icon: "fa-comments" },
+    { name: "التربية الاسلامية", gradient: "linear-gradient(135deg, #059669 0%, #065f46 100%)", icon: "fa-mosque" }
+  ];
+
+  // ✅ ذاكرة مؤقتة للملفات (استعلام واحد + تجميع في الذاكرة)
+  let extraFilesByCategory = { training: [], support: [] };
+
+  // ✅ دالة محسّنة لتحميل وعرض النماذج/الدعم حسب المواد
   function loadExtraFilesScreen(category) {
     const containerId = category === 'training' ? 'trainingContainer' : 'supportContainer';
     const container = document.getElementById(containerId);
-    
+    if (!container) return;
+
     container.innerHTML = `<div class="text-center mt-10"><div class="w-8 h-8 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin mx-auto"></div></div>`;
-    
+
     if (activeExtraFilesUnsub) { activeExtraFilesUnsub(); activeExtraFilesUnsub = null; }
-    
+
+    // ✅ استعلام واحد فقط + تجميع في الذاكرة
     const q = query(collection(db, "extraFiles"), where("category", "==", category));
     activeExtraFilesUnsub = onSnapshot(q, (snap) => {
-      currentExtraFiles = [];
-      snap.forEach(d => currentExtraFiles.push({ id: d.id, category, ...d.data() }));
-      currentExtraFiles.sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
+      const allFiles = [];
+      snap.forEach(d => allFiles.push({ id: d.id, category, ...d.data() }));
+      allFiles.sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
       
-      if (currentExtraFiles.length === 0) {
-        container.innerHTML = `<div class="text-center mt-20 text-gray-400"><i class="far fa-folder-open text-5xl mb-4 block"></i><p>لا توجد ملفات.</p></div>`;
-        return;
-      }
+      // تخزين في الذاكرة
+      extraFilesByCategory[category] = allFiles;
+      currentExtraFiles = allFiles;
       
-      let html = `<div class="space-y-4 mt-2">`;
-      currentExtraFiles.forEach((f, index) => {
-        const hasAccess = canAccessExtraFile(f);
-        const numBadge = `<span class="w-8 h-8 bg-indigo-100 dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 rounded-full flex items-center justify-center font-bold text-sm flex-shrink-0">${index + 1}</span>`;
-        const lockBadge = f.isPremium 
-          ? (hasAccess 
-              ? '<span class="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded font-bold">✓ مشترك</span>' 
-              : '<span class="text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded font-bold">مدفوع</span>')
-          : '<span class="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded font-bold">مجاني</span>';
-        
-        const priceBox = (f.isPremium && f.price && !hasAccess) 
-          ? `<div class="text-xs font-extrabold text-amber-700 bg-amber-50 dark:bg-amber-900/30 border-2 border-amber-300 rounded-lg px-2 py-1 whitespace-nowrap">💰 ${f.price} ${appCurrency}</div>` 
-          : '';
-        
-        html += `<div class="card-hover bg-gradient-to-l from-blue-50 to-indigo-50 dark:from-slate-800 dark:to-slate-700 p-4 rounded-2xl shadow-md border border-white dark:border-slate-600 flex items-center justify-between gap-2">
-          <div class="flex items-center gap-3 flex-1 min-w-0">
-            ${numBadge}
-            <div class="flex flex-col min-w-0">
-              <h4 class="font-bold text-sm text-gray-800 dark:text-gray-200 truncate">${f.fileName}</h4>
-              <div class="flex gap-1 mt-1 items-center flex-wrap">${lockBadge}</div>
-            </div>
-          </div>
-          <div class="flex gap-2 items-center flex-shrink-0">
-            ${priceBox}
-            <button onclick="playClickSound(); viewExtraFileByIndex(${index})" class="bg-blue-500 text-white text-xs px-4 py-2 rounded-lg font-bold flex items-center gap-1 hover:bg-blue-600 transition-colors" aria-label="عرض"><i class="fas fa-eye"></i> عرض</button>
-            <button onclick="handleExtraFileDownload(${index})" class="bg-emerald-50 dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 p-2.5 rounded-lg border border-emerald-100 dark:border-slate-700 hover:bg-emerald-100 transition-colors" aria-label="تحميل"><i class="fas fa-download"></i></button>
-          </div>
-        </div>`;
-      });
-      html += `</div>`;
-      container.innerHTML = html;
+      // عرض شبكة المواد
+      renderExtraSubjectsGrid(category);
+    }, (err) => {
+      console.warn('loadExtraFiles error:', err);
+      container.innerHTML = `<div class="text-center mt-20 text-gray-400"><i class="far fa-folder-open text-5xl mb-4 block"></i><p>تعذر تحميل الملفات. تحقق من اتصالك.</p></div>`;
     });
   }
+
+  // ✅ عرض شبكة المواد للنماذج/الدعم
+  function renderExtraSubjectsGrid(category) {
+    // ✅ تحديث الحالة: نحن الآن في عرض شبكة المواد
+    extraViewMode[category] = 'subjects';
+    const containerId = category === 'training' ? 'trainingContainer' : 'supportContainer';
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    const allFiles = extraFilesByCategory[category] || [];
+
+    // تجميع الملفات حسب المادة (ملفات بدون مادة → "عام")
+    const filesBySubject = {};
+    allFiles.forEach(f => {
+      const subj = f.subject || 'عام';
+      if (!filesBySubject[subj]) filesBySubject[subj] = [];
+      filesBySubject[subj].push(f);
+    });
+
+    // عرض المواد التي تحتوي على ملفات فقط + "عام"
+    let html = `<div class="mb-4">
+      <h2 class="text-sm font-bold text-gray-600 dark:text-gray-300 mb-3 flex items-center gap-2">
+        <i class="fas fa-th-large text-indigo-500"></i> اختر المادة
+      </h2>
+    </div>
+    <div class="grid grid-cols-2 gap-3 mb-4">`;
+
+    // بطاقة "كل الملفات"
+    html += `<div onclick="showExtraFilesForSubject('${category}', null)" style="background: linear-gradient(135deg, #6366f1 0%, #4338ca 100%);" class="card-hover p-3 rounded-2xl shadow-lg cursor-pointer active:scale-95 transition-transform duration-150 h-28 flex flex-col justify-between text-white relative overflow-hidden">
+      <i class="fas fa-layer-group text-2xl opacity-90"></i>
+      <h3 class="text-sm font-extrabold leading-tight">كل الملفات (${allFiles.length})</h3>
+    </div>`;
+
+    // بطاقات المواد
+    extraSubjectsList.forEach(sub => {
+      const count = (filesBySubject[sub.name] || []).length;
+      if (count === 0) return;
+      html += `<div onclick="showExtraFilesForSubject('${category}', '${sub.name}')" style="background: ${sub.gradient};" class="card-hover p-3 rounded-2xl shadow-lg cursor-pointer active:scale-95 transition-transform duration-150 h-28 flex flex-col justify-between text-white relative overflow-hidden">
+        <i class="fas ${sub.icon} text-2xl opacity-90"></i>
+        <h3 class="text-sm font-extrabold leading-tight">${sub.name} (${count})</h3>
+      </div>`;
+    });
+
+    // بطاقة "عام" (للملفات بدون مادة)
+    const generalCount = (filesBySubject['عام'] || []).length;
+    if (generalCount > 0) {
+      html += `<div onclick="showExtraFilesForSubject('${category}', 'عام')" style="background: linear-gradient(135deg, #64748b 0%, #334155 100%);" class="card-hover p-3 rounded-2xl shadow-lg cursor-pointer active:scale-95 transition-transform duration-150 h-28 flex flex-col justify-between text-white relative overflow-hidden">
+        <i class="fas fa-folder text-2xl opacity-90"></i>
+        <h3 class="text-sm font-extrabold leading-tight">عام (${generalCount})</h3>
+      </div>`;
+    }
+
+    html += `</div>`;
+    
+    if (allFiles.length === 0) {
+      html = `<div class="text-center mt-20 text-gray-400"><i class="far fa-folder-open text-5xl mb-4 block"></i><p>لا توجد ملفات حالياً.</p></div>`;
+    }
+    
+    container.innerHTML = html;
+  }
+
+  // ✅ عرض ملفات مادة محددة
+  window.showExtraFilesForSubject = function(category, subjectName) {
+    playClickSound();
+    // ✅ تحديث الحالة: نحن الآن في عرض الملفات
+    extraViewMode[category] = 'files';
+    const containerId = category === 'training' ? 'trainingContainer' : 'supportContainer';
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    const allFiles = extraFilesByCategory[category] || [];
+    let filtered;
+    if (subjectName) {
+      filtered = allFiles.filter(f => (f.subject || 'عام') === subjectName);
+    } else {
+      filtered = allFiles;
+    }
+    currentExtraFiles = filtered;
+
+    if (filtered.length === 0) {
+      container.innerHTML = `<div class="text-center mt-20 text-gray-400"><i class="far fa-folder-open text-5xl mb-4 block"></i><p>لا توجد ملفات.</p></div>`;
+      return;
+    }
+
+    let html = `<div class="flex items-center gap-3 mb-4">
+      <button onclick="renderExtraSubjectsGrid('${category}')" class="bg-white dark:bg-slate-800 p-2 rounded-xl shadow-sm border text-gray-600" aria-label="رجوع">
+        <i class="fas fa-arrow-right"></i>
+      </button>
+      <h2 class="text-md font-bold text-gray-800 dark:text-gray-200">${subjectName || 'كل الملفات'} (${filtered.length})</h2>
+    </div>
+    <div class="space-y-4 mt-2">`;
+
+    filtered.forEach((f, index) => {
+      const hasAccess = canAccessExtraFile(f);
+      const numBadge = `<span class="w-8 h-8 bg-indigo-100 dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 rounded-full flex items-center justify-center font-bold text-sm flex-shrink-0">${index + 1}</span>`;
+      const lockBadge = f.isPremium 
+        ? (hasAccess 
+            ? '<span class="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded font-bold">✓ مشترك</span>' 
+            : '<span class="text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded font-bold">مدفوع</span>')
+        : '<span class="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded font-bold">مجاني</span>';
+      
+      const priceBox = (f.isPremium && f.price && !hasAccess) 
+        ? `<div class="text-xs font-extrabold text-amber-700 bg-amber-50 dark:bg-amber-900/30 border-2 border-amber-300 rounded-lg px-2 py-1 whitespace-nowrap">💰 ${f.price} ${appCurrency}</div>` 
+        : '';
+      
+      html += `<div class="card-hover bg-gradient-to-l from-blue-50 to-indigo-50 dark:from-slate-800 dark:to-slate-700 p-4 rounded-2xl shadow-md border border-white dark:border-slate-600 flex items-center justify-between gap-2">
+        <div class="flex items-center gap-3 flex-1 min-w-0">
+          ${numBadge}
+          <div class="flex flex-col min-w-0">
+            <h4 class="font-bold text-sm text-gray-800 dark:text-gray-200 truncate">${f.fileName}</h4>
+            <div class="flex gap-1 mt-1 items-center flex-wrap">${lockBadge}</div>
+          </div>
+        </div>
+        <div class="flex gap-2 items-center flex-shrink-0">
+          ${priceBox}
+          <button onclick="playClickSound(); viewExtraFileByIndex(${index})" class="bg-blue-500 text-white text-xs px-4 py-2 rounded-lg font-bold flex items-center gap-1 hover:bg-blue-600 transition-colors" aria-label="عرض"><i class="fas fa-eye"></i> عرض</button>
+          <button onclick="handleExtraFileDownload(${index})" class="bg-emerald-50 dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 p-2.5 rounded-lg border border-emerald-100 dark:border-slate-700 hover:bg-emerald-100 transition-colors" aria-label="تحميل"><i class="fas fa-download"></i></button>
+        </div>
+      </div>`;
+    });
+    html += `</div>`;
+    container.innerHTML = html;
+  };
 
   window.openTrainingScreen = function(skipPush = false) {
     if (typeof skipPush !== 'boolean') skipPush = false;
@@ -2277,8 +2473,32 @@
     loadExtraFilesScreen('support');
   };
 
-  window.closeTrainingScreen = function() { requestBack(); };
-  window.closeSupportScreen = function() { requestBack(); };
+  // ✅ متغير لتتبع حالة العرض (subjects = شبكة المواد، files = ملفات مادة محددة)
+  let extraViewMode = { training: 'subjects', support: 'subjects' };
+
+  // ✅ إغلاق ذكي لشاشة التدريب: يعود لشبكة المواد أولاً
+  window.closeTrainingScreen = function() {
+    if (extraViewMode.training === 'files') {
+      // العودة لشبكة المواد
+      extraViewMode.training = 'subjects';
+      renderExtraSubjectsGrid('training');
+    } else {
+      // إغلاق الشاشة
+      requestBack();
+    }
+  };
+
+  // ✅ إغلاق ذكي لشاشة الدعم: يعود لشبكة المواد أولاً
+  window.closeSupportScreen = function() {
+    if (extraViewMode.support === 'files') {
+      // العودة لشبكة المواد
+      extraViewMode.support = 'subjects';
+      renderExtraSubjectsGrid('support');
+    } else {
+      // إغلاق الشاشة
+      requestBack();
+    }
+  };
 
   window.viewExtraFileByIndex = async function(index) {
     const f = currentExtraFiles[index];
@@ -2512,6 +2732,9 @@
         } else if (last.name === 'mathBranch' && last.data?.branch) {
           // ✅ استرجاع فرع الرياضيات
           openMathBranch(last.data.branch, true);
+        } else if (last.name === 'englishBranch' && last.data?.branch) {
+          // ✅ استرجاع فرع اللغة الانكليزية
+          openEnglishBranch(last.data.branch, true);
         } else if (last.name === 'trainingScreen') {
           openTrainingScreen(true);
         } else if (last.name === 'supportScreen') {
@@ -2667,6 +2890,67 @@
     c.innerHTML = html;
   }
 
+  // ============ ✅ نظام التطبيق الذكي (تحميل APK / مشاركة) ============
+  const APK_DOWNLOAD_URL = 'https://github.com/enjaz-Bank/enjaz-app/releases/download/v1.0/default.apk';
+  const APP_SHARE_URL = 'https://enjaz-app.github.io';
+  const APP_SHARE_TEXT = '📱 منصة إنجاز الأكاديمية\n\n📚 البكالوريا العلمي - المنهاج السوري\n✓ دروس، نماذج امتحانية، ملفات دعم\n✓ يعمل دون إنترنت\n\n🌐 حمّل التطبيق:';
+
+  // ✅ كشف ما إذا كنا داخل تطبيق TWA
+  function isRunningInApp() {
+    return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+  }
+
+  // ✅ تحديث شكل الزر حسب السياق (موقع أم تطبيق)
+  function updateInstallButtonUI() {
+    const icon = document.getElementById('installAppIcon');
+    const text = document.getElementById('installAppText');
+    if (!icon || !text) return;
+
+    if (isRunningInApp()) {
+      // داخل التطبيق → زر مشاركة
+      icon.className = 'fas fa-share-nodes text-3xl text-blue-600 dark:text-blue-400';
+      text.innerText = 'شارك التطبيق';
+    } else {
+      // في المتصفح → زر تحميل
+      icon.className = 'fas fa-mobile-screen-button text-3xl text-blue-600 dark:text-blue-400';
+      text.innerText = 'حمّل التطبيق';
+    }
+  }
+
+  // ✅ دالة الزر الذكي
+  window.installApp = async function() {
+    if (isRunningInApp()) {
+      // ✅ داخل التطبيق → مشاركة عبر Web Share API
+      if (navigator.share) {
+        try {
+          await navigator.share({
+            title: 'منصة إنجاز الأكاديمية',
+            text: APP_SHARE_TEXT + ' ' + APK_DOWNLOAD_URL,
+            url: APK_DOWNLOAD_URL
+          });
+        } catch(e) {
+          // المستخدم ألغى المشاركة — لا شيء
+        }
+      } else {
+        // fallback: نسخ الرابط
+        try {
+          await navigator.clipboard.writeText(APP_SHARE_TEXT + ' ' + APK_DOWNLOAD_URL);
+          alert('✅ تم نسخ رابط التطبيق! شاركه مع أصدقائك عبر واتساب أو تلغرام.');
+        } catch(e) {
+          prompt('انسخ هذا الرابط وشاركه:', APK_DOWNLOAD_URL);
+        }
+      }
+    } else {
+      // ✅ في المتصفح → تحميل APK مباشرة
+      window.open(APK_DOWNLOAD_URL, '_blank');
+    }
+  };
+
+  // ✅ فحص أولي عند تحميل الصفحة
+  function initInstallButton() {
+    updateInstallButtonUI();
+  }
+
   window.onload = function() {
     if (localStorage.getItem('enjaz_theme') === 'dark') { 
       document.documentElement.classList.add('dark'); 
@@ -2675,6 +2959,8 @@
     loadCart();
     loadGuestPurchases();
     restoreSoundState();
+    // ✅ تهيئة زر تحميل التطبيق
+    setTimeout(() => { initInstallButton(); }, 500);
     window.loadAppLessons(); 
     window.loadAppExams(); 
     window.loadAppSettings(); 
@@ -3053,16 +3339,22 @@
 
     <div class="relative z-20 px-4 -mt-6 mb-3">
       <div class="bg-white/90 dark:bg-slate-800/90 backdrop-blur-md p-3 rounded-2xl shadow-lg border">
-        <div class="grid grid-cols-3 gap-2 text-center">
+        <div id="statsGrid" class="grid grid-cols-3 gap-2 text-center">
           <div><p class="text-2xl font-extrabold text-indigo-600 dark:text-indigo-400" id="statLessons">0</p><p class="text-sm font-bold text-gray-700 dark:text-gray-300 mt-1">الدرس</p></div>
-          <div class="border-r border-l border-gray-200 dark:border-slate-600"><p class="text-2xl font-extrabold text-emerald-600 dark:text-emerald-400" id="statSubjects">0</p><p class="text-sm font-bold text-gray-700 dark:text-gray-300 mt-1">المادة</p></div>
-          <!-- ✅ زر الإشعارات بدلاً من نسبة الإنجاز -->
-          <div class="relative">
+          <!-- ✅ زر الإشعارات -->
+          <div class="border-r border-l border-gray-200 dark:border-slate-600 relative">
             <button onclick="openNotificationsScreen()" class="relative inline-flex items-center justify-center w-full" aria-label="الإشعارات">
               <i class="fas fa-bell text-3xl text-amber-500 dark:text-amber-400"></i>
               <span id="notifBadge" class="hidden absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1 animate-pulse">0</span>
             </button>
             <p class="text-sm font-bold text-gray-700 dark:text-gray-300 mt-1">الإشعارات</p>
+          </div>
+          <!-- ✅ زر التطبيق الذكي (تحميل في الموقع / مشاركة في التطبيق) -->
+          <div id="installAppContainer" class="relative">
+            <button onclick="installApp()" class="relative inline-flex items-center justify-center w-full" aria-label="التطبيق">
+              <i id="installAppIcon" class="fas fa-mobile-screen-button text-3xl text-blue-600 dark:text-blue-400"></i>
+            </button>
+            <p id="installAppText" class="text-sm font-bold text-gray-700 dark:text-gray-300 mt-1">حمّل التطبيق</p>
           </div>
         </div>
       </div>
@@ -3322,6 +3614,62 @@
       <button onclick="cancelExitHint()" class="text-gray-400 hover:text-gray-600 text-sm py-2">
         <i class="fas fa-times ml-1"></i> تراجع والبقاء في التطبيق
       </button>
+    </div>
+  </div>
+
+  <!-- ✅ نافذة تعليمات تثبيت التطبيق -->
+  <div id="installInstructionsModal" class="fixed inset-0 z-[200] bg-black/70 hidden justify-center items-center p-4 backdrop-blur-sm">
+    <div class="bg-white dark:bg-slate-800 rounded-3xl p-6 max-w-sm w-full text-center shadow-2xl max-h-[90vh] overflow-y-auto">
+      <div class="w-20 h-20 mx-auto bg-gradient-to-br from-blue-500 to-indigo-600 rounded-full flex items-center justify-center mb-4 shadow-lg">
+        <i class="fas fa-mobile-screen-button text-4xl text-white"></i>
+      </div>
+      <h3 class="text-xl font-extrabold text-gray-800 dark:text-white mb-2">📲 تثبيت التطبيق</h3>
+      <p class="text-sm text-gray-500 dark:text-gray-400 mb-4 leading-relaxed">
+        اتبع الخطوات التالية حسب جهازك:
+      </p>
+
+      <!-- تعليمات أندرويد -->
+      <div class="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700 rounded-2xl p-3 mb-3 text-right">
+        <p class="font-bold text-green-700 dark:text-green-300 text-sm mb-1 flex items-center gap-1">
+          <i class="fab fa-android"></i> أندرويد (Chrome):
+        </p>
+        <ol class="text-xs text-gray-600 dark:text-gray-300 space-y-1 mr-4 list-decimal">
+          <li>اضغط زر القائمة (⋮) أعلى اليمين</li>
+          <li>اختر <strong>"تثبيت التطبيق"</strong> أو <strong>"إضافة للشاشة الرئيسية"</strong></li>
+          <li>اضغط <strong>"تثبيت"</strong></li>
+        </ol>
+      </div>
+
+      <!-- تعليمات iOS -->
+      <div class="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700 rounded-2xl p-3 mb-3 text-right">
+        <p class="font-bold text-blue-700 dark:text-blue-300 text-sm mb-1 flex items-center gap-1">
+          <i class="fab fa-apple"></i> iPhone (Safari):
+        </p>
+        <ol class="text-xs text-gray-600 dark:text-gray-300 space-y-1 mr-4 list-decimal">
+          <li>اضغط زر المشاركة (📤) أسفل الشاشة</li>
+          <li>اختر <strong>"إضافة إلى الشاشة الرئيسية"</strong></li>
+          <li>اضغط <strong>"إضافة"</strong></li>
+        </ol>
+      </div>
+
+      <!-- تعليمات Desktop -->
+      <div class="bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-700 rounded-2xl p-3 mb-4 text-right">
+        <p class="font-bold text-purple-700 dark:text-purple-300 text-sm mb-1 flex items-center gap-1">
+          <i class="fas fa-desktop"></i> كمبيوتر:
+        </p>
+        <ol class="text-xs text-gray-600 dark:text-gray-300 space-y-1 mr-4 list-decimal">
+          <li>اضغط أيقونة التثبيت (⊕) في شريط العنوان</li>
+          <li>اختر <strong>"تثبيت"</strong></li>
+        </ol>
+      </div>
+
+      <div class="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-xl p-2 mb-4">
+        <p class="text-xs text-amber-700 dark:text-amber-300">
+          💡 التطبيق يعمل بنفس الكود ولا يأخذ مساحة كبيرة (~2MB)
+        </p>
+      </div>
+
+      <button onclick="closeInstallInstructionsModal()" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white p-3 rounded-xl font-bold text-sm">حسناً، فهمت</button>
     </div>
   </div>
 
