@@ -248,12 +248,14 @@
     const linkEl = document.getElementById(`${category}FileLink`);
     const priceEl = document.getElementById(`${category}FilePrice`);
     const premiumEl = document.getElementById(`${category}FilePremium`);
+    const subjectEl = document.getElementById(`${category}FileSubject`);
     
     const fileName = (nameEl?.value || '').trim();
     const fileInput = inputEl?.files[0];
     const fileLink = (linkEl?.value || '').trim();
     const price = (priceEl?.value || '').trim();
     const isPremium = premiumEl?.checked || false;
+    const subject = (subjectEl?.value || '').trim();
     
     if (!fileName) {
       alert("الرجاء إدخال اسم الملف");
@@ -300,6 +302,7 @@
       await addDoc(collection(db, "extraFiles"), {
         category,
         fileName,
+        subject: subject || "",
         fileData,
         isPdf,
         isExternal,
@@ -315,6 +318,7 @@
       if (linkEl) linkEl.value = '';
       if (priceEl) priceEl.value = '';
       if (premiumEl) premiumEl.checked = false;
+      if (subjectEl) subjectEl.value = '';
       
     } catch(e) {
       console.error('تفاصيل الخطأ:', e);
@@ -349,6 +353,10 @@
         const typeBadge = f.isExternal 
           ? `<span class="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded font-bold">رابط خارجي</span>` 
           : (f.isPdf ? `<span class="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded font-bold">PDF</span>` : `<span class="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded font-bold">HTML</span>`);
+        // ✅ شارة المادة
+        const subjectBadge = f.subject 
+          ? `<span class="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded font-bold">📚 ${f.subject}</span>` 
+          : `<span class="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded font-bold">عام</span>`;
         
         c.innerHTML += `
           <div class="bg-white p-4 rounded-lg shadow border mb-3 flex justify-between items-center gap-2 flex-wrap">
@@ -356,7 +364,7 @@
               <span class="w-8 h-8 bg-indigo-100 text-indigo-700 rounded-full flex items-center justify-center font-bold text-sm flex-shrink-0">${index + 1}</span>
               <div class="min-w-0">
                 <h4 class="font-bold text-gray-800 truncate">${f.fileName}</h4>
-                <div class="flex gap-2 mt-1 flex-wrap">${premiumBadge} ${typeBadge}</div>
+                <div class="flex gap-2 mt-1 flex-wrap">${subjectBadge} ${premiumBadge} ${typeBadge}</div>
               </div>
             </div>
             <div class="flex gap-2 items-center flex-wrap">
@@ -1209,15 +1217,24 @@
     if (progress) progress.classList.add('hidden');
   };
 
-  // ✅ إظهار/إخفاء حقل فرع الرياضيات حسب المادة المختارة
+  // ✅ إظهار/إخفاء حقل فرع الرياضيات أو الانكليزي حسب المادة المختارة
   window.toggleMathBranch = function() {
     const subject = document.getElementById('subject').value;
-    const branchContainer = document.getElementById('mathBranchContainer');
-    if (!branchContainer) return;
+    const mathContainer = document.getElementById('mathBranchContainer');
+    const englishContainer = document.getElementById('englishBranchContainer');
+    if (!mathContainer || !englishContainer) return;
+
+    // إخفاء كلاهما افتراضياً
+    mathContainer.style.display = 'none';
+    englishContainer.style.display = 'none';
+
+    // إظهار حقل الرياضيات عند اختيار رياضيات
     if (subject === 'رياضيات') {
-      branchContainer.style.display = 'block';
-    } else {
-      branchContainer.style.display = 'none';
+      mathContainer.style.display = 'block';
+    }
+    // إظهار حقل الانكليزي عند اختيار اللغة الانكليزية
+    else if (subject === 'اللغة الانكليزية') {
+      englishContainer.style.display = 'block';
     }
   };
 
@@ -1283,12 +1300,17 @@
     
     try {
       // 1. إنشاء وثيقة الدرس
-      // ✅ إضافة حقل branch لمادة الرياضيات فقط
+      // ✅ إضافة حقل branch لمادة الرياضيات أو الانكليزي
       const lessonData = { subject, title, createdAt: new Date() };
       if (subject === 'رياضيات') {
         const selectedBranch = document.querySelector('input[name="mathBranch"]:checked');
         if (selectedBranch) {
           lessonData.branch = selectedBranch.value; // 'algebra' أو 'geometry'
+        }
+      } else if (subject === 'اللغة الانكليزية') {
+        const selectedEnglishBranch = document.querySelector('input[name="englishBranch"]:checked');
+        if (selectedEnglishBranch) {
+          lessonData.branch = selectedEnglishBranch.value; // 'grammar' أو 'literature'
         }
       }
       const lessonRef = await addDoc(collection(db, "lessons"), lessonData);
@@ -1392,6 +1414,16 @@
             sName = 'رياضيات - بدون فرع';  // الدروس القديمة
           }
         }
+        // ✅ فصل دروس اللغة الانكليزية حسب الفرع
+        else if (sName === 'اللغة الانكليزية') {
+          if (lesson.branch === 'grammar') {
+            sName = 'انكليزي - قواعد';
+          } else if (lesson.branch === 'literature') {
+            sName = 'انكليزي - أدب ونصوص';
+          } else {
+            sName = 'انكليزي - بدون فرع';  // الدروس القديمة
+          }
+        }
         if(!subjects[sName]) subjects[sName] = [];
         subjects[sName].push(lesson);
       });
@@ -1399,13 +1431,16 @@
       let subjectIndex = 0;
       Object.keys(subjects).forEach(subjectName => {
         const catId = `cat_${subjectIndex}`, arrowId = `arrow_${subjectIndex}`;
-        // ✅ تمييز بصري لفروع الرياضيات
+        // ✅ تمييز بصري لفروع الرياضيات والانكليزي
         let bgClass = 'bg-indigo-50 hover:bg-indigo-100';
         let textClass = 'text-indigo-800';
         let iconHTML = '📚';
         if (subjectName === 'رياضيات - جبر') { bgClass = 'bg-blue-50 hover:bg-blue-100'; textClass = 'text-blue-800'; iconHTML = '📘'; }
         else if (subjectName === 'رياضيات - هندسة') { bgClass = 'bg-slate-100 hover:bg-slate-200'; textClass = 'text-slate-800'; iconHTML = '📏'; }
         else if (subjectName === 'رياضيات - بدون فرع') { bgClass = 'bg-amber-50 hover:bg-amber-100'; textClass = 'text-amber-800'; iconHTML = '⚠️'; }
+        else if (subjectName === 'انكليزي - قواعد') { bgClass = 'bg-amber-50 hover:bg-amber-100'; textClass = 'text-amber-800'; iconHTML = '✏️'; }
+        else if (subjectName === 'انكليزي - أدب ونصوص') { bgClass = 'bg-orange-50 hover:bg-orange-100'; textClass = 'text-orange-800'; iconHTML = '📖'; }
+        else if (subjectName === 'انكليزي - بدون فرع') { bgClass = 'bg-amber-50 hover:bg-amber-100'; textClass = 'text-amber-800'; iconHTML = '⚠️'; }
         
         finalHTML += `<div class="mb-4 border border-gray-200 rounded-xl overflow-hidden"><div onclick="toggleCategory('${catId}', '${arrowId}')" class="${bgClass} p-4 cursor-pointer flex justify-between items-center"><h3 class="text-xl font-bold ${textClass}">${iconHTML} ${subjectName} (${subjects[subjectName].length})</h3><span id="${arrowId}" class="text-2xl">⬇️</span></div><div id="${catId}" class="p-4 hidden bg-gray-50 grid grid-cols-1 gap-4">`;
         subjects[subjectName].forEach(lesson => {
@@ -2273,6 +2308,21 @@
         <h2 class="text-xl font-bold text-indigo-900 mb-4">📄 إضافة نموذج امتحاني أو تدريب</h2>
         <div class="space-y-4">
           <input id="trainingFileName" type="text" placeholder="اسم الملف (مثلاً: نموذج بكالوريا 2023)" class="w-full p-2 border rounded-lg">
+          <!-- ✅ اختيار المادة للملف -->
+          <div>
+            <label class="text-sm font-bold block mb-1 text-gray-700">📚 المادة (اختياري):</label>
+            <select id="trainingFileSubject" class="w-full p-2 border rounded-lg text-sm">
+              <option value="">عام (بدون مادة محددة)</option>
+              <option value="رياضيات">رياضيات</option>
+              <option value="الفيزياء">الفيزياء</option>
+              <option value="الكيمياء">الكيمياء</option>
+              <option value="العلوم">العلوم</option>
+              <option value="اللغة العربية">اللغة العربية</option>
+              <option value="اللغة الانكليزية">اللغة الانكليزية</option>
+              <option value="اللغةالفرنسية">اللغة الفرنسية</option>
+              <option value="التربية الاسلامية">التربية الاسلامية</option>
+            </select>
+          </div>
           <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
             <input id="trainingFileInput" type="file" accept=".html,.pdf" class="p-2 border rounded-lg text-sm">
             <input id="trainingFileLink" type="text" placeholder="أو رابط خارجي (Drive)" class="p-2 border rounded-lg text-sm">
@@ -2295,6 +2345,21 @@
         <h2 class="text-xl font-bold text-indigo-900 mb-4">📚 إضافة ملف دعم وتقوية</h2>
         <div class="space-y-4">
           <input id="supportFileName" type="text" placeholder="اسم الملف (مثلاً: أنشطة يومية)" class="w-full p-2 border rounded-lg">
+          <!-- ✅ اختيار المادة للملف -->
+          <div>
+            <label class="text-sm font-bold block mb-1 text-gray-700">📚 المادة (اختياري):</label>
+            <select id="supportFileSubject" class="w-full p-2 border rounded-lg text-sm">
+              <option value="">عام (بدون مادة محددة)</option>
+              <option value="رياضيات">رياضيات</option>
+              <option value="الفيزياء">الفيزياء</option>
+              <option value="الكيمياء">الكيمياء</option>
+              <option value="العلوم">العلوم</option>
+              <option value="اللغة العربية">اللغة العربية</option>
+              <option value="اللغة الانكليزية">اللغة الانكليزية</option>
+              <option value="اللغةالفرنسية">اللغة الفرنسية</option>
+              <option value="التربية الاسلامية">التربية الاسلامية</option>
+            </select>
+          </div>
           <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
             <input id="supportFileInput" type="file" accept=".html,.pdf" class="p-2 border rounded-lg text-sm">
             <input id="supportFileLink" type="text" placeholder="أو رابط خارجي (Drive)" class="p-2 border rounded-lg text-sm">
@@ -2671,6 +2736,20 @@
               <label class="flex items-center gap-2 bg-white px-3 py-2 rounded-lg border cursor-pointer hover:bg-slate-100">
                 <input type="radio" id="branchGeometry" name="mathBranch" value="geometry" class="w-4 h-4">
                 <span class="font-bold text-sm">📏 الهندسة</span>
+              </label>
+            </div>
+          </div>
+          <!-- ✅ حقل فرع اللغة الانكليزية (يظهر فقط عند اختيار اللغة الانكليزية) -->
+          <div id="englishBranchContainer" class="bg-amber-50 p-3 rounded-lg border border-amber-200" style="display:none;">
+            <label class="text-sm font-bold block mb-2 text-amber-800">📘 فرع اللغة الانكليزية:</label>
+            <div class="flex gap-2">
+              <label class="flex items-center gap-2 bg-white px-3 py-2 rounded-lg border cursor-pointer hover:bg-amber-100">
+                <input type="radio" id="branchGrammar" name="englishBranch" value="grammar" checked class="w-4 h-4">
+                <span class="font-bold text-sm">✏️ القواعد</span>
+              </label>
+              <label class="flex items-center gap-2 bg-white px-3 py-2 rounded-lg border cursor-pointer hover:bg-amber-100">
+                <input type="radio" id="branchLiterature" name="englishBranch" value="literature" class="w-4 h-4">
+                <span class="font-bold text-sm">📖 الأدب والنصوص</span>
               </label>
             </div>
           </div>
