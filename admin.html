@@ -104,25 +104,41 @@
 
   window.adminLogout = function() { signOut(auth); }
 
+  // ✅ نظام الكاش لتجنب الاستعلامات المتكررة
+  let packagesCache = null;
+  let usersCache = null;
+  let tabsLoaded = {};
+
+  async function ensurePackagesCache() {
+    if (!packagesCache) {
+      try {
+        const pkgSnap = await getDoc(doc(db, "settings", "packages"));
+        packagesCache = pkgSnap.exists() ? pkgSnap.data() : {};
+      } catch(e) { packagesCache = {}; }
+    }
+    return packagesCache;
+  }
+
+  async function ensureUsersCache() {
+    if (!usersCache) {
+      try {
+        const usersSnap = await getDocs(collection(db, "users"));
+        usersCache = {};
+        usersSnap.forEach(u => {
+          const data = u.data();
+          usersCache[u.id] = data.email || (data.name ? `(${data.name})` : 'زائر مجهول');
+        });
+      } catch(e) { usersCache = {}; }
+    }
+    return usersCache;
+  }
+
   function initAdmin() {
     initFileInputs();
-    window.loadLessons(); 
-    window.loadAds(); 
-    window.loadNotifications(); 
-    window.loadExams(); 
+    // ✅ تحميل تبويب الدروس فقط (الافتراضي)
+    window.loadLessons();
     window.loadSettings(); 
-    window.loadSlider();
-    window.loadStudents(); 
-    window.loadCodes(); 
-    window.loadPackagesSettings(); 
-    window.loadPackagesForCodes();
-    window.selectCodeType('package');
-    loadAllFilesForExtraSelection();
-    window.loadExtraFiles('training');
-    window.loadExtraFiles('support');
-    window.loadRecoveryCodes();
-    // ✅ تعيين حالة حقل فرع الرياضيات الافتراضية (مرئي لأن رياضيات هي الافتراضية)
-    setTimeout(() => { window.toggleMathBranch(); }, 100);
+    window.toggleMathBranch();
   }
 
   window.compressImage = function(file) {
@@ -158,7 +174,17 @@
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('bg-indigo-900', 'text-white'));
     document.getElementById('btn-'+tabName).classList.add('bg-indigo-900', 'text-white');
     
+    // ✅ تحميل كسول: حمّل البيانات فقط عند أول فتح للتبويب
     if (tabName === 'maintenance') loadMaintenanceStats();
+    if (tabName === 'training' && !tabsLoaded.training) { window.loadExtraFiles('training'); tabsLoaded.training = true; }
+    if (tabName === 'support' && !tabsLoaded.support) { window.loadExtraFiles('support'); tabsLoaded.support = true; }
+    if (tabName === 'packages' && !tabsLoaded.packages) { window.loadPackagesSettings(); window.loadPackagesForCodes(); tabsLoaded.packages = true; }
+    if (tabName === 'students' && !tabsLoaded.students) { window.loadStudents(); tabsLoaded.students = true; }
+    if (tabName === 'codes' && !tabsLoaded.codes) { window.loadCodes(); tabsLoaded.codes = true; }
+    if (tabName === 'recovery' && !tabsLoaded.recovery) { window.loadRecoveryCodes(); tabsLoaded.recovery = true; }
+    if (tabName === 'ads' && !tabsLoaded.ads) { window.loadAds(); tabsLoaded.ads = true; }
+    if (tabName === 'exams' && !tabsLoaded.exams) { window.loadExams(); tabsLoaded.exams = true; }
+    if (tabName === 'notifications' && !tabsLoaded.notifications) { window.loadNotifications(); tabsLoaded.notifications = true; }
   };
 
   // ============ 🗑️ دوال التحديد والحذف الجماعي الجديدة ============
@@ -447,7 +473,6 @@
       if (!c) return;
       c.innerHTML = "";
       
-      // تصفير التحديد عند التحديث
       selectedRecoveryCodes.clear();
       updateBulkDeleteButton('recovery');
       const selectAllCb = document.getElementById('selectAllRecovery');
@@ -458,18 +483,15 @@
         return;
       }
       
-      let usersMap = {};
-      try {
-        const usersSnap = await getDocs(collection(db, "users"));
-        usersSnap.forEach(u => { 
-          const data = u.data();
-          usersMap[u.id] = data.email || (data.name ? `(${data.name})` : 'زائر مجهول');
-        });
-      } catch(e) { console.warn('users fetch:', e); }
+      // ✅ استخدام الكاش بدلاً من جلب المستخدمين في كل مرة
+      const usersMap = await ensureUsersCache();
       
       let codesArr = [];
       snap.forEach(d => codesArr.push({ id: d.id, ...d.data() }));
       codesArr.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+      
+      // ✅ بناء HTML مرة واحدة
+      let htmlParts = [];
       
       codesArr.forEach(code => {
         const ownerEmail = usersMap[code.uid] || `UID: ${(code.uid || '').substring(0, 10)}...`;
@@ -479,7 +501,7 @@
           ? new Date(code.createdAt.seconds * 1000).toLocaleDateString('ar-SY') 
           : 'غير معروف';
         
-        c.innerHTML += `
+        htmlParts.push(`
           <div class="bg-white p-4 rounded-lg shadow border mb-3 flex items-start gap-3">
             <input type="checkbox" class="recovery-checkbox w-5 h-5 mt-2 cursor-pointer" value="${code.id}" onchange="toggleSelection('recovery', '${code.id}', this.checked)">
             <div class="flex-1 min-w-0 flex justify-between items-start gap-2 flex-wrap">
@@ -500,8 +522,10 @@
               </div>
             </div>
           </div>
-        `;
+        `);
       });
+      
+      c.innerHTML = htmlParts.join('');
     });
   };
 
@@ -632,7 +656,6 @@
       const c = document.getElementById('studentsList');
       c.innerHTML = "";
       
-      // تصفير التحديد عند التحديث
       selectedStudents.clear();
       updateBulkDeleteButton('students');
       const selectAllCb = document.getElementById('selectAllStudents');
@@ -640,11 +663,11 @@
 
       if(snap.empty) { c.innerHTML = "<p class='text-gray-500'>لا يوجد طلاب مسجلون بعد.</p>"; return; }
       
-      let packagesSettings = {};
-      try {
-        const pkgSnap = await getDoc(doc(db, "settings", "packages"));
-        if (pkgSnap.exists()) packagesSettings = pkgSnap.data();
-      } catch(e) {}
+      // ✅ استخدام الكاش بدلاً من جلب الباقات في كل مرة
+      const packagesSettings = await ensurePackagesCache();
+      
+      // ✅ بناء HTML مرة واحدة بدلاً من الإضافة المتكررة
+      let htmlParts = [];
       
       snap.forEach(d => {
         const u = d.data();
@@ -686,7 +709,7 @@
         const emailSafe = (u.email || '').replace(/'/g, "\\'");
         actionBtnsHtml += `<button onclick="deleteStudentAccount('${d.id}', '${emailSafe}')" class="text-[10px] bg-red-600 text-white hover:bg-red-700 px-3 py-1 rounded font-bold mr-1 mb-1">🗑️ حذف</button>`;
         
-        c.innerHTML += `<div class="bg-white p-4 rounded-lg shadow mb-3 flex items-start gap-3">
+        htmlParts.push(`<div class="bg-white p-4 rounded-lg shadow mb-3 flex items-start gap-3">
           <input type="checkbox" class="student-checkbox w-5 h-5 mt-1 cursor-pointer" value="${d.id}" onchange="toggleSelection('students', '${d.id}', this.checked)">
           <div class="flex-1 min-w-0">
             <div class="flex justify-between items-start flex-wrap gap-2">
@@ -698,10 +721,12 @@
               ${actionBtnsHtml ? `<div class="flex flex-wrap items-start">${actionBtnsHtml}</div>` : ''}
             </div>
           </div>
-        </div>`;
+        </div>`);
       });
+      
+      c.innerHTML = htmlParts.join('');
     });
-  }
+  };
 
   window.revokeStudentPackage = async function(uid, pkgId, pkgName) {
     if (!confirm(`هل أنت متأكد من سحب "${pkgName}" من هذا الطالب؟`)) return;
@@ -845,7 +870,6 @@
       const c = document.getElementById('codesList');
       c.innerHTML = "";
       
-      // تصفير التحديد عند التحديث
       selectedCodes.clear();
       updateBulkDeleteButton('codes');
       const selectAllCb = document.getElementById('selectAllCodes');
@@ -853,21 +877,18 @@
 
       if(snap.empty) { c.innerHTML = "<p class='text-gray-500'>لا توجد أكواد مولدة.</p>"; return; }
       
-      let packagesSettings = {};
-      try {
-        const pkgSnap = await getDoc(doc(db, "settings", "packages"));
-        if (pkgSnap.exists()) packagesSettings = pkgSnap.data();
-      } catch(e) {}
-      
-      let usersMap = {};
-      try {
-        const usersSnap = await getDocs(collection(db, "users"));
-        usersSnap.forEach(u => { usersMap[u.id] = u.data().email || 'غير معروف'; });
-      } catch(e) {}
+      // ✅ استخدام الكاش بدلاً من جلب الباقات والمستخدمين في كل مرة
+      const [packagesSettings, usersMap] = await Promise.all([
+        ensurePackagesCache(),
+        ensureUsersCache()
+      ]);
       
       const codesArr = [];
       snap.forEach(d => codesArr.push({ id: d.id, ...d.data() }));
       codesArr.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+      
+      // ✅ بناء HTML مرة واحدة بدلاً من الإضافة المتكررة
+      let htmlParts = [];
       
       codesArr.forEach(cd => {
         const displayCode = cd.code || cd.id;
@@ -904,7 +925,7 @@
           : (cd.isUsed ? '' : `<button onclick="toggleCodeDisabled('${cd.id}', true)" class="bg-yellow-100 text-yellow-700 hover:bg-yellow-200 px-2 py-1 rounded text-xs" title="تعطيل">⏸️</button>`);
         const deleteBtn = `<button onclick="deleteItem('codes','${cd.id}')" class="bg-red-600 text-white px-2 py-1 rounded text-xs">🗑️</button>`;
         
-        c.innerHTML += `<div class="bg-white p-3 rounded-lg shadow mb-2 flex items-start gap-3 ${isDisabled ? 'opacity-60' : ''}">
+        htmlParts.push(`<div class="bg-white p-3 rounded-lg shadow mb-2 flex items-start gap-3 ${isDisabled ? 'opacity-60' : ''}">
           <input type="checkbox" class="code-checkbox w-5 h-5 mt-2 cursor-pointer" value="${cd.id}" onchange="toggleSelection('codes', '${cd.id}', this.checked)">
           <div class="flex-1 min-w-0">
             <div class="flex items-center gap-2 flex-wrap">
@@ -918,8 +939,10 @@
             ${usageInfo}
           </div>
           <div class="flex gap-1 flex-wrap items-start">${copyBtn}${disableBtn}${deleteBtn}</div>
-        </div>`;
+        </div>`);
       });
+      
+      c.innerHTML = htmlParts.join('');
     });
   }
 
@@ -1404,34 +1427,23 @@
       snapshot.forEach((docSnap) => {
         const lesson = { id: docSnap.id, ...docSnap.data() };
         let sName = lesson.subject || "غير مصنف";
-        // ✅ فصل دروس الرياضيات حسب الفرع
         if (sName === 'رياضيات') {
-          if (lesson.branch === 'algebra') {
-            sName = 'رياضيات - جبر';
-          } else if (lesson.branch === 'geometry') {
-            sName = 'رياضيات - هندسة';
-          } else {
-            sName = 'رياضيات - بدون فرع';  // الدروس القديمة
-          }
-        }
-        // ✅ فصل دروس اللغة الانكليزية حسب الفرع
-        else if (sName === 'اللغة الانكليزية') {
-          if (lesson.branch === 'grammar') {
-            sName = 'انكليزي - قواعد';
-          } else if (lesson.branch === 'literature') {
-            sName = 'انكليزي - أدب ونصوص';
-          } else {
-            sName = 'انكليزي - بدون فرع';  // الدروس القديمة
-          }
+          if (lesson.branch === 'algebra') sName = 'رياضيات - جبر';
+          else if (lesson.branch === 'geometry') sName = 'رياضيات - هندسة';
+          else sName = 'رياضيات - بدون فرع';
+        } else if (sName === 'اللغة الانكليزية') {
+          if (lesson.branch === 'grammar') sName = 'انكليزي - قواعد';
+          else if (lesson.branch === 'literature') sName = 'انكليزي - أدب ونصوص';
+          else sName = 'انكليزي - بدون فرع';
         }
         if(!subjects[sName]) subjects[sName] = [];
         subjects[sName].push(lesson);
       });
-      let finalHTML = "";
+      // ✅ بناء HTML مرة واحدة
+      let htmlParts = [];
       let subjectIndex = 0;
       Object.keys(subjects).forEach(subjectName => {
         const catId = `cat_${subjectIndex}`, arrowId = `arrow_${subjectIndex}`;
-        // ✅ تمييز بصري لفروع الرياضيات والانكليزي
         let bgClass = 'bg-indigo-50 hover:bg-indigo-100';
         let textClass = 'text-indigo-800';
         let iconHTML = '📚';
@@ -1442,14 +1454,14 @@
         else if (subjectName === 'انكليزي - أدب ونصوص') { bgClass = 'bg-orange-50 hover:bg-orange-100'; textClass = 'text-orange-800'; iconHTML = '📖'; }
         else if (subjectName === 'انكليزي - بدون فرع') { bgClass = 'bg-amber-50 hover:bg-amber-100'; textClass = 'text-amber-800'; iconHTML = '⚠️'; }
         
-        finalHTML += `<div class="mb-4 border border-gray-200 rounded-xl overflow-hidden"><div onclick="toggleCategory('${catId}', '${arrowId}')" class="${bgClass} p-4 cursor-pointer flex justify-between items-center"><h3 class="text-xl font-bold ${textClass}">${iconHTML} ${subjectName} (${subjects[subjectName].length})</h3><span id="${arrowId}" class="text-2xl">⬇️</span></div><div id="${catId}" class="p-4 hidden bg-gray-50 grid grid-cols-1 gap-4">`;
+        htmlParts.push(`<div class="mb-4 border border-gray-200 rounded-xl overflow-hidden"><div onclick="toggleCategory('${catId}', '${arrowId}')" class="${bgClass} p-4 cursor-pointer flex justify-between items-center"><h3 class="text-xl font-bold ${textClass}">${iconHTML} ${subjectName} (${subjects[subjectName].length})</h3><span id="${arrowId}" class="text-2xl">⬇️</span></div><div id="${catId}" class="p-4 hidden bg-gray-50 grid grid-cols-1 gap-4">`);
         subjects[subjectName].forEach(lesson => {
-          finalHTML += `<div class="bg-white p-4 rounded-xl shadow border flex justify-between items-center"><div><h4 class="font-bold text-lg">${lesson.title}</h4><div class="flex gap-2 mt-2"><button onclick="openFilesModal('${lesson.id}', '${lesson.title.replace(/'/g, "\\'")}')" class="bg-blue-600 text-white px-3 py-1 rounded text-xs">📁 إدارة الملفات</button><button onclick="deleteItem('lessons','${lesson.id}')" class="bg-red-600 text-white px-3 py-1 rounded text-xs">حذف</button></div></div></div>`;
+          htmlParts.push(`<div class="bg-white p-4 rounded-xl shadow border flex justify-between items-center"><div><h4 class="font-bold text-lg">${lesson.title}</h4><div class="flex gap-2 mt-2"><button onclick="openFilesModal('${lesson.id}', '${lesson.title.replace(/'/g, "\\'")}')" class="bg-blue-600 text-white px-3 py-1 rounded text-xs">📁 إدارة الملفات</button><button onclick="deleteItem('lessons','${lesson.id}')" class="bg-red-600 text-white px-3 py-1 rounded text-xs">حذف</button></div></div></div>`);
         });
-        finalHTML += `</div></div>`;
+        htmlParts.push(`</div></div>`);
         subjectIndex++;
       });
-      container.innerHTML = finalHTML;
+      container.innerHTML = htmlParts.join('');
     });
   };
 
