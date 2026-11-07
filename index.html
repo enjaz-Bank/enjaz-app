@@ -1642,81 +1642,98 @@
             
             let subsHtml = '';
             if (!isFull) {
-              // عرض المواد
-              const sp = Array.isArray(pkg.subjects) && pkg.subjects.length ? `<div class="text-sm font-bold text-gray-700 dark:text-gray-300 mb-1">📚 ${pkg.subjects.join(' • ')}</div>` : '';
+              // 1️⃣ عرض المواد الأساسية
+              let sp = '';
+              if (Array.isArray(pkg.subjects) && pkg.subjects.length) {
+                sp = `<div class="text-right mb-4 w-full">
+                  <div class="text-base font-extrabold text-gray-900 dark:text-white mb-2">📚 المواد المشمولة بالكامل:</div>
+                  <ul class="text-base text-gray-800 dark:text-gray-200 mr-5 space-y-1">
+                    ${pkg.subjects.map(s => `<li>• ${s}</li>`).join('')}
+                  </ul>
+                </div>`;
+              }
               
-              // ✅ عرض تفصيلي ذكي للملفات الإضافية
-              let ep = '';
+              // ✅ تصنيف الملفات الإضافية
+              let supportHtml = '';
+              let trainingHtml = '';
+              let extraFilesHtml = '';
+              
               if (Array.isArray(pkg.extraFiles) && pkg.extraFiles.length > 0) {
-                // تصنيف الملفات
                 const lessons = [];
-                const trainingBySubject = {};  // { "رياضيات": [file1, file2], "علوم": [file3] }
+                const trainingBySubject = {};
                 const supportBySubject = {};
                 
                 pkg.extraFiles.forEach(fid => {
                   const f = extraFilesDetails[fid];
                   if (!f) return;
                   
-                  // تحديد النوع: إذا كان له lessonId → درس، إذا كان category → نماذج/دعم
                   if (f.lessonId || (!f.category && !f.isExternal && f.fileData)) {
-                    // ملف درس فردي
                     lessons.push(f.fileName || 'ملف');
                   } else if (f.category === 'training') {
                     const subj = f.subject || 'عام';
-                    if (!trainingBySubject[subj]) trainingBySubject[subj] = [];
-                    trainingBySubject[subj].push(f.fileName || 'ملف');
+                    trainingBySubject[subj] = (trainingBySubject[subj] || 0) + 1;
                   } else if (f.category === 'support') {
                     const subj = f.subject || 'عام';
-                    if (!supportBySubject[subj]) supportBySubject[subj] = [];
-                    supportBySubject[subj].push(f.fileName || 'ملف');
+                    supportBySubject[subj] = (supportBySubject[subj] || 0) + 1;
                   } else {
-                    // ملف قديم بدون تصنيف
                     lessons.push(f.fileName || 'ملف');
                   }
                 });
                 
-                let extraParts = [];
-                
-                // عرض الملفات الفردية بأسمائها
-                if (lessons.length > 0) {
-                  extraParts.push(`<div class="text-[11px] text-gray-600 dark:text-gray-400 mt-1">📂 ${lessons.map(n => `<span class="font-bold">${n}</span>`).join('، ')}</div>`);
-                }
-                
-                // عرض نماذج امتحانية مجمعة حسب المادة
-                const trainingSubjects = Object.keys(trainingBySubject);
-                if (trainingSubjects.length > 0) {
-                  const trainingHtml = trainingSubjects.map(subj => 
-                    `${subj} (${trainingBySubject[subj].length})`
-                  ).join('، ');
-                  extraParts.push(`<div class="text-[11px] text-amber-700 dark:text-amber-400 mt-1">📄 نماذج امتحانية: ${trainingHtml}</div>`);
-                }
-                
-                // عرض ملفات دعم مجمعة حسب المادة
+                // 2️⃣ ملفات الدعم والتقوية (عرض عامودي)
                 const supportSubjects = Object.keys(supportBySubject);
                 if (supportSubjects.length > 0) {
-                  const supportHtml = supportSubjects.map(subj => 
-                    `${subj} (${supportBySubject[subj].length})`
-                  ).join('، ');
-                  extraParts.push(`<div class="text-[11px] text-emerald-700 dark:text-emerald-400 mt-1">📖 ملفات دعم: ${supportHtml}</div>`);
+                  const items = supportSubjects.map(subj => 
+                    `<li>• ${subj} (${supportBySubject[subj]})</li>`
+                  ).join('');
+                  supportHtml = `<div class="text-right mb-4 w-full">
+                    <div class="text-base font-extrabold text-gray-900 dark:text-white mb-2">📖 ملفات دعم وتقوية:</div>
+                    <ul class="text-base text-gray-800 dark:text-gray-200 mr-5 space-y-1">
+                      ${items}
+                    </ul>
+                  </div>`;
                 }
                 
-                ep = `<div class="bg-amber-50 dark:bg-amber-900/20 rounded-xl p-2 mt-2 mb-2 border border-amber-200 dark:border-amber-700">
-                  <div class="text-xs font-bold text-amber-600 dark:text-amber-400 mb-1">🎁 محتوى إضافي (${pkg.extraFiles.length}):</div>
-                  ${extraParts.join('')}
-                </div>`;
+                // 3️⃣ نماذج امتحانية وتدريب (عرض عامودي)
+                const trainingSubjects = Object.keys(trainingBySubject);
+                if (trainingSubjects.length > 0) {
+                  const items = trainingSubjects.map(subj => 
+                    `<li>• ${subj} (${trainingBySubject[subj]})</li>`
+                  ).join('');
+                  trainingHtml = `<div class="text-right mb-4 w-full">
+                    <div class="text-base font-extrabold text-gray-900 dark:text-white mb-2">📄 نماذج امتحانية وتدريب:</div>
+                    <ul class="text-base text-gray-800 dark:text-gray-200 mr-5 space-y-1">
+                      ${items}
+                    </ul>
+                  </div>`;
+                }
+                
+                // 4️⃣ محتوى إضافي (ملفات فردية)
+                if (lessons.length > 0) {
+                  const items = lessons.map(n => `<li>• <span class="font-semibold">${n}</span></li>`).join('');
+                  extraFilesHtml = `<div class="text-right mb-4 w-full">
+                    <div class="text-base font-extrabold text-gray-900 dark:text-white mb-2">🎁 محتوى إضافي:</div>
+                    <ul class="text-base text-gray-800 dark:text-gray-200 mr-5 space-y-1">
+                      ${items}
+                    </ul>
+                  </div>`;
+                }
               }
               
-              subsHtml = sp + ep;
+              // ✅ ترتيب العرض: مواد → دعم → نماذج → إضافي
+              subsHtml = sp + supportHtml + trainingHtml + extraFilesHtml;
             }
             
             html += `
-            <div class="relative border-2 rounded-2xl shadow-lg p-6 flex flex-col items-center text-center transform hover:scale-105 transition-transform duration-300 dark:bg-slate-800" style="border-color:${borderColor}; background-color:${cardBg}">
+            <div class="relative border-4 rounded-2xl shadow-xl p-6 flex flex-col items-center text-center transform hover:scale-105 transition-transform duration-300 dark:bg-slate-800" style="border-color:${borderColor}; background-color:${cardBg}">
               ${badge}
               <h3 class="font-extrabold text-xl mb-2 text-gray-800 dark:text-white">${pkg.title}</h3>
-              <p class="text-gray-500 dark:text-gray-400 text-sm mb-2 min-h-[40px]">${pkg.desc || ''}</p>
-              ${subsHtml}
-              <div class="text-3xl font-extrabold text-indigo-600 dark:text-indigo-400 mb-6">${pkg.price || 'مجاني'} ${pkg.price ? appCurrency : ''}</div>
-              <button onclick="showPremiumModal()" class="w-full text-white px-4 py-3 rounded-xl font-bold text-sm transition" style="background:${btnBg}">اشترك الآن</button>
+              <p class="text-gray-500 dark:text-gray-400 text-sm mb-3 min-h-[40px]">${pkg.desc || ''}</p>
+              <div class="w-full text-right">
+                ${subsHtml}
+              </div>
+              <div class="text-3xl font-extrabold text-indigo-600 dark:text-indigo-400 mb-6 mt-2">${pkg.price || 'مجاني'} ${pkg.price ? appCurrency : ''}</div>
+              <button onclick="showPremiumModal()" class="w-full text-white px-4 py-3 rounded-xl font-bold text-base transition" style="background:${btnBg}">اشترك الآن</button>
             </div>`;
           }
         }
